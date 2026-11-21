@@ -96,6 +96,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         // bar's controls, and 40 with the compact one; an accessory under the compact one makes
         // it the bar's own height, so the bar looks the same in full screen as in a window.
         window?.toolbarStyle = .unifiedCompact
+        // A full screen window comes through here again when another window is dragged onto its
+        // Space in Mission Control to share it, and a second accessory then left a blank band
+        // under the bar, which stayed after the other window left.
+        guard stripPadding == nil else { return }
         let padding = NSTitlebarAccessoryViewController()
         let space = StripSpace(frame: NSRect(x: 0, y: 0, width: 1, height: Theme.barHeight - 40))
         padding.view = space
@@ -117,9 +121,18 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         // Over the system's title bar rather than as a toolbar item: the toolbar moves its items
         // aside when the menu bar comes down, and nothing in this bar should move.
         let bar = NSHostingView(rootView: TopBar(workspace: workspace, inTitleBar: true))
-        bar.frame = container.frame
-        bar.autoresizingMask = [.width]
+        // Pinned to the system's bar, so it follows the strip when the window shares its Space
+        // with another; a frame set once stayed full width in a half-screen strip, and the bar's
+        // right end was cut off.
+        bar.sizingOptions = []
+        bar.translatesAutoresizingMaskIntoConstraints = false
         parent.addSubview(bar, positioned: .above, relativeTo: container)
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            bar.topAnchor.constraint(equalTo: container.topAnchor),
+            bar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
         titleBar = bar
         setSystemButtons(hidden: true)
     }
