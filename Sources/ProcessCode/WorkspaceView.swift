@@ -157,8 +157,18 @@ struct TopBar: View {
             }
         }
         // The strip has a grey backdrop of its own; over it the bar is on the content's colour, as
-        // in a window, so in focus mode the screen is one colour to the top.
-        .background { if inTitleBar { Theme.background.allowsHitTesting(false) } }
+        // in a window, so in focus mode the screen is one colour to the top. Above the sidebar it's
+        // the sidebar's colour, so the sidebar's column is one colour to the top as well.
+        .background {
+            if inTitleBar {
+                Theme.background.allowsHitTesting(false)
+                if workspace.sidebarVisible {
+                    Theme.sidebar.frame(width: workspace.sidebarWidth)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
     }
 }
 

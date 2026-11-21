@@ -29,13 +29,13 @@ struct ProjectsView: View {
                     .foregroundStyle(Theme.text)
                 Spacer()
                 Button("Clone…") { sheet = .clone }
-                    .buttonStyle(PlateButtonStyle())
+                    .buttonStyle(PlateButtonStyle(glass: true))
                     .help("Clone a repository from GitHub or a URL")
                 Button("New…") { sheet = .new }
-                    .buttonStyle(PlateButtonStyle())
+                    .buttonStyle(PlateButtonStyle(glass: true))
                     .help("Start a new repository")
                 Button("Open Folder…", action: chooseFolder)
-                    .buttonStyle(PlateButtonStyle())
+                    .buttonStyle(PlateButtonStyle(glass: true))
                     .help("Open any folder (⌘O)")
             }
             .padding(.horizontal, 24)
@@ -60,7 +60,7 @@ struct ProjectsView: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 32)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.radius))
+            .glassEffect(.regular, in: Capsule())
             .padding(.horizontal, 24)
             .padding(.bottom, 8)
 
@@ -219,30 +219,44 @@ private struct ProjectRow: View {
 /// The bordered plate used for the window's secondary actions.
 struct PlateButtonStyle: ButtonStyle {
     var prominent = false
+    /// A glass capsule, for the buttons across the top of the window, as in the workspace's bar.
+    /// Buttons in a sheet stay flat plates.
+    var glass = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Styled(configuration: configuration, prominent: prominent)
+        Styled(configuration: configuration, prominent: prominent, glass: glass)
     }
 
     struct Styled: View {
         let configuration: Configuration
         let prominent: Bool
+        let glass: Bool
         @State private var hovering = false
         @Environment(\.isEnabled) private var enabled
 
         var body: some View {
-            configuration.label
+            let label = configuration.label
                 .font(.system(size: 13, weight: prominent ? .semibold : .medium))
                 .foregroundStyle(prominent ? Theme.background : Theme.text)
                 .lineLimit(1)
                 .padding(.horizontal, 12)
                 .frame(height: 28)
-                .background(prominent ? AnyShapeStyle(Theme.text) : AnyShapeStyle(Color.primary.opacity(hovering ? 0.1 : 0.06)),
-                            in: RoundedRectangle(cornerRadius: Theme.radius))
-                .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(prominent ? Color.clear : Theme.border))
-                .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
-                .contentShape(Rectangle())
-                .onHover { hovering = $0 }
+            Group {
+                if glass {
+                    label
+                        .glassEffect(.regular.interactive(enabled), in: Capsule())
+                        .opacity(enabled ? 1 : 0.4)
+                        .contentShape(Capsule())
+                } else {
+                    label
+                        .background(prominent ? AnyShapeStyle(Theme.text) : AnyShapeStyle(Color.primary.opacity(hovering ? 0.1 : 0.06)),
+                                    in: RoundedRectangle(cornerRadius: Theme.radius))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(prominent ? Color.clear : Theme.border))
+                        .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
+                        .contentShape(Rectangle())
+                }
+            }
+            .onHover { hovering = $0 }
         }
     }
 }
