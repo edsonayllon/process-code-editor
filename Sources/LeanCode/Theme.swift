@@ -29,25 +29,27 @@ extension NSColor {
 }
 
 /// One palette, one radius family and one spacing scale (multiples of 4) for the whole app.
-/// The colours are near-black neutrals with a single green accent; the git and syntax colours
-/// are GitHub's, which is what the code is read against everywhere else.
+/// The colours are dark-grey neutrals (not near-black, which glares against light text) with a single
+/// green accent. The syntax colours are GitHub's, which is what the code is read against everywhere else;
+/// the dark git colours are softer tints of GitHub's hues.
 enum Theme {
     // Surfaces
-    static let backgroundNS = NSColor(light: 0xffffff, dark: 0x0a0b0a)
-    static let sidebarNS = NSColor(light: 0xf5f6f5, dark: 0x111312)
-    static let borderNS = NSColor(light: 0xdcdfdd, dark: 0x232625)
-    static let currentLineNS = NSColor(light: 0xf3f5f4, dark: 0x131514)
-    static let selectionNS = NSColor(light: 0xc8e1ff, dark: 0x1f3a5c)
+    static let backgroundNS = NSColor(light: 0xffffff, dark: 0x171918)
+    static let sidebarNS = NSColor(light: 0xf5f6f5, dark: 0x1d1f1e)
+    static let borderNS = NSColor(light: 0xdcdfdd, dark: 0x303432)
+    static let currentLineNS = NSColor(light: 0xf3f5f4, dark: 0x1e2120)
+    static let selectionNS = NSColor(light: 0xc8e1ff, dark: 0x264a73)
 
     // Text
-    static let textNS = NSColor(light: 0x1f2328, dark: 0xe6e8e7)
+    static let textNS = NSColor(light: 0x1f2328, dark: 0xdcdfdd)
     static let secondaryNS = NSColor(light: 0x59636e, dark: 0x9a9f9c)
-    static let tertiaryNS = NSColor(light: 0x8a929b, dark: 0x666b68)
+    static let tertiaryNS = NSColor(light: 0x8a929b, dark: 0x808582)
 
-    // Accent and git states
-    static let accentNS = NSColor(light: 0x1a7f37, dark: 0x3fb950)
-    static let modifiedNS = NSColor(light: 0x9a6700, dark: 0xd29922)
-    static let deletedNS = NSColor(light: 0xcf222e, dark: 0xf85149)
+    // Accent and git states. In dark mode green and yellow are lifted to one lightness (OKLCH L 0.82),
+    // between secondary and primary text, so a changed file never reads dimmer than an unchanged one.
+    static let accentNS = NSColor(light: 0x1a7f37, dark: 0x75df8f)
+    static let modifiedNS = NSColor(light: 0x9a6700, dark: 0xe8be62)
+    static let deletedNS = NSColor(light: 0xcf222e, dark: 0xff7b72)
 
     static let background = Color(nsColor: backgroundNS)
     static let sidebar = Color(nsColor: sidebarNS)
