@@ -357,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             add(m, "Show Terminal", #selector(toggleTerminal(_:)), "j", [.command, .shift])
             add(m, "Show Sidebar", #selector(toggleSidebar(_:)), "b")
             add(m, "Show Changes", #selector(toggleChanges(_:)), "g", [.command, .control])
+            add(m, "Hide Margins", #selector(toggleMargins(_:)), "m", [.command, .shift])
             m.addItem(.separator())
             add(m, "Cycle Source and Preview", #selector(cyclePreview(_:)), "v", [.command, .shift])
             m.addItem(.separator())
@@ -395,6 +396,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return workspace.map { !$0.documents.isEmpty } ?? false
         case #selector(toggleSidebar(_:)):
             item.title = workspace?.sidebarVisible == true ? "Hide Sidebar" : "Show Sidebar"
+            return workspace != nil
+        case #selector(toggleMargins(_:)):
+            item.title = Settings.shared.margins ? "Hide Margins" : "Show Margins"
             return workspace != nil
         case #selector(toggleChanges(_:)):
             item.title = workspace?.sidebarMode == .changes ? "Show Files" : "Show Changes"
@@ -460,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func toggleTerminalMaximized(_ sender: Any?) { workspace?.toggleTerminalMaximized() }
     @objc func toggleTerminal(_ sender: Any?) { workspace?.toggleTerminal() }
     @objc func toggleSidebar(_ sender: Any?) { workspace?.sidebarVisible.toggle() }
+    @objc func toggleMargins(_ sender: Any?) { Settings.shared.margins.toggle() }
 
     @objc func toggleChanges(_ sender: Any?) {
         guard let workspace else { return }

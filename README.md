@@ -52,6 +52,7 @@ open -a "Process Code" ~/Documents/GitHub/resume
 | Fill the window with the terminal / back | ⌘J        |
 | Hide or show the terminal                | ⇧⌘J       |
 | Hide or show the sidebar                 | ⌘B        |
+| Hide or show the margins                 | ⇧⌘M       |
 | Files / Changes                          | ⌃⌘G       |
 | Go to file                               | ⌘P        |
 | Start the agent in a new tab             | ⇧⌘A       |

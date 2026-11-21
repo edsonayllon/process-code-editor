@@ -32,6 +32,9 @@ final class Settings: ObservableObject {
     @Published var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: "appearance"); applyAppearance() } }
     @Published var fontName: String { didSet { defaults.set(fontName, forKey: "fontName") } }
     @Published var fontSize: Double { didSet { defaults.set(fontSize, forKey: "fontSize") } }
+    /// The terminal's text is kept to a centred column, with margins either side, instead of
+    /// running the width of a wide window.
+    @Published var margins: Bool { didSet { defaults.set(margins, forKey: "margins") } }
     @Published var agentID: String { didSet { defaults.set(agentID, forKey: "agentID") } }
     @Published var customAgentCommand: String { didSet { defaults.set(customAgentCommand, forKey: "customAgentCommand") } }
     @Published var startAgentOnOpen: Bool { didSet { defaults.set(startAgentOnOpen, forKey: "startAgentOnOpen") } }
@@ -44,6 +47,7 @@ final class Settings: ObservableObject {
         fontName = defaults.string(forKey: "fontName") ?? ""
         let size = defaults.double(forKey: "fontSize")
         fontSize = Settings.fontSizes.contains(size) ? size : 13
+        margins = defaults.object(forKey: "margins") == nil ? true : defaults.bool(forKey: "margins")
         agentID = defaults.string(forKey: "agentID") ?? "claude"
         customAgentCommand = defaults.string(forKey: "customAgentCommand") ?? ""
         startAgentOnOpen = defaults.object(forKey: "startAgentOnOpen") as? Bool ?? true
@@ -64,6 +68,22 @@ final class Settings: ObservableObject {
             if let font = NSFont(name: name, size: size) { return font }
         }
         return .monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// How many characters wide the column of text is when it has margins: as wide as code and
+    /// hard-wrapped text usually run, so neither is cut short.
+    static let readableColumns = 120
+
+    /// The width of that column in the code font, so it holds the same text at any font size.
+    var readableWidth: CGFloat {
+        let cell = ("W" as NSString).size(withAttributes: [.font: codeFont]).width
+        return (CGFloat(Settings.readableColumns) * cell).rounded(.up)
+    }
+
+    /// The margin either side of a column `readable` wide in a pane `available` wide. None when
+    /// the pane is no wider than the column, so a narrow window loses nothing.
+    static func sideMargin(available: CGFloat, readable: CGFloat) -> CGFloat {
+        max(0, ((available - readable) / 2).rounded(.down))
     }
 
     /// The agent the launch button starts, or nil when a custom one has no command yet.

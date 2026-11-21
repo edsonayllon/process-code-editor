@@ -31,6 +31,7 @@ struct SettingsView: View {
                 Stepper(value: $settings.fontSize, in: Settings.fontSizes, step: 1) {
                     LabeledContent("Size", value: "\(Int(settings.fontSize)) pt")
                 }
+                Toggle("Margins beside the terminal in a wide window", isOn: $settings.margins)
                 Text("func greet(name: String) -> String { \"Hello, \\(name)\" }")
                     .font(Font(settings.codeFont))
                     .foregroundStyle(Theme.secondary)

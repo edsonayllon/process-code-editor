@@ -49,7 +49,7 @@ struct WorkspaceView: View {
                     }
                 }
                 if workspace.terminalVisible || !workspace.editorShown {
-                    TerminalPanel(workspace: workspace)
+                    TerminalPanel(workspace: workspace, width: area.size.width)
                 }
             }
         }
@@ -426,6 +426,9 @@ private struct DocumentView: View {
 /// window and brings the editor back.
 private struct TerminalPanel: View {
     @ObservedObject var workspace: Workspace
+    /// How wide the panel is, to know whether there's room for margins.
+    let width: CGFloat
+    @ObservedObject private var settings = Settings.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -442,6 +445,14 @@ private struct TerminalPanel: View {
                     }
                 }
                 Spacer(minLength: 8)
+                // Only where there's room for margins is there anything to switch.
+                if Settings.sideMargin(available: width - 12, readable: settings.readableWidth) > 0 {
+                    Button { settings.margins.toggle() } label: {
+                        Image(systemName: settings.margins ? "arrow.left.and.right" : "arrow.right.and.arrow.left")
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .help(settings.margins ? "Use the Full Width (⇧⌘M)" : "Show Margins (⇧⌘M)")
+                }
                 if !workspace.documents.isEmpty {
                     let maximized = workspace.terminalMaximized
                     Button { workspace.toggleTerminalMaximized() } label: {
@@ -456,9 +467,10 @@ private struct TerminalPanel: View {
             .background(BarDoubleClick { if !workspace.documents.isEmpty { workspace.toggleTerminalMaximized() } })
 
             if let session = workspace.activeTerminal {
-                TerminalHost(session: session, focusToken: workspace.terminalFocusToken)
-                    .padding(.leading, 12)
-                    .padding(.bottom, 8)
+                ReadableColumn(leading: 12, onMarginClick: session.focus) {
+                    TerminalHost(session: session, focusToken: workspace.terminalFocusToken)
+                }
+                .padding(.bottom, 8)
             } else {
                 MessageView(icon: "terminal", title: "No terminal open") {
                     Button("New Terminal") { workspace.newTerminal() }
@@ -466,6 +478,37 @@ private struct TerminalPanel: View {
             }
         }
         .background(Theme.background)
+    }
+}
+
+/// Keeps the terminal's wide text readable: in a pane wider than a line reads well at, the
+/// content is held to a centred column with empty margins either side. A narrower pane is filled
+/// as before. The editor has no margins. The width changes in one step, because every width in
+/// between would resize the terminal.
+private struct ReadableColumn<Content: View>: View {
+    /// Space always kept at the left, margins or not.
+    var leading: CGFloat = 0
+    /// A click in a margin goes to the content, as it would if the text reached that far.
+    var onMarginClick: () -> Void = {}
+    @ViewBuilder let content: Content
+    @ObservedObject private var settings = Settings.shared
+
+    var body: some View {
+        GeometryReader { area in
+            let margin = settings.margins ? Settings.sideMargin(available: area.size.width - leading, readable: settings.readableWidth) : 0
+            HStack(spacing: 0) {
+                edge(width: leading + margin)
+                content
+                edge(width: margin)
+            }
+        }
+    }
+
+    private func edge(width: CGFloat) -> some View {
+        Color.clear
+            .frame(width: width)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onMarginClick)
     }
 }
 

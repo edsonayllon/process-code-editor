@@ -226,6 +226,24 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(EditorController.indentUnit(of: "a", language: .swift), "    ")
     }
 
+    func testMarginsOnlyWhereThePaneIsWiderThanTheColumn() {
+        XCTAssertEqual(Settings.sideMargin(available: 1288, readable: 862), 213)
+        XCTAssertEqual(Settings.sideMargin(available: 862, readable: 862), 0)
+        XCTAssertEqual(Settings.sideMargin(available: 600, readable: 862), 0, "a narrow pane is filled")
+    }
+
+    func testMarginsSetting() {
+        let defaults = UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!
+        let settings = Settings(defaults: defaults)
+        XCTAssertTrue(settings.margins, "margins are on until turned off")
+        settings.margins = false
+        XCTAssertFalse(Settings(defaults: defaults).margins)
+        settings.fontSize = 13
+        let width = settings.readableWidth
+        settings.fontSize = 16
+        XCTAssertGreaterThan(settings.readableWidth, width, "the column holds the same text at a bigger size")
+    }
+
     func testAgentSetting() {
         let defaults = UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!
         let settings = Settings(defaults: defaults)
