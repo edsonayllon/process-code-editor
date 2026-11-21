@@ -1,7 +1,14 @@
 #!/bin/bash
-# Builds "Lean Code.app" into build/. Pass --install to also copy it to /Applications.
+# Builds "Lean Code.app" into build/. Pass --install to also copy it to /Applications, or --update to
+# install it and open the new copy.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+MODE="${1:-}"
+case "$MODE" in
+  "" | --install | --update) ;;
+  *) echo "usage: $0 [--install | --update]" >&2; exit 2 ;;
+esac
 
 APP_NAME="Lean Code"
 BUNDLE_ID="com.leancode.app"
@@ -81,9 +88,24 @@ IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Apple Develop
 codesign --force --sign "${IDENTITY:--}" "$APP"
 echo "Built $APP (signed with: ${IDENTITY:-ad-hoc})"
 
-if [ "${1:-}" = "--install" ]; then
+if [ -n "$MODE" ]; then
+  # Run from Lean Code's own terminal, quitting the app hangs up this script and closes its output.
+  # Ignore the hangup and let the messages fail, so the install still finishes.
+  trap '' HUP
   osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
+  # Quitting can be cancelled from the app's "still running" prompt, so wait for it to go.
+  for _ in $(seq 100); do
+    pgrep -x LeanCode >/dev/null || break
+    sleep 0.1
+  done
+  if pgrep -x LeanCode >/dev/null; then
+    echo "$APP_NAME is still running, so it was not replaced. Quit it and run this again." >&2
+    exit 1
+  fi
   rm -rf "/Applications/$APP_NAME.app"
   cp -R "$APP" "/Applications/$APP_NAME.app"
-  echo "Installed /Applications/$APP_NAME.app"
+  echo "Installed /Applications/$APP_NAME.app" 2>/dev/null || true
+  if [ "$MODE" = "--update" ]; then
+    open "/Applications/$APP_NAME.app"
+  fi
 fi

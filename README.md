@@ -34,10 +34,11 @@ Settings are deliberately few: light, dark or the system's, the code font and it
 
 ```sh
 ./scripts/build-app.sh --install   # builds and copies Lean Code.app to /Applications
+./scripts/build-app.sh --update    # the same, then opens the new copy
 swift test                         # runs the tests
 ```
 
-Without `--install` the app is left in `build/`. Open a folder from the app (⌘O), by dropping it on the Dock icon,
+Without a flag the app is left in `build/`. Open a folder from the app (⌘O), by dropping it on the Dock icon,
 or from a shell:
 
 ```sh
