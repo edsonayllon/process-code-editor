@@ -119,27 +119,37 @@ extension GitState {
 /// A borderless icon button that shows a soft plate on hover, as in the bars.
 struct IconButtonStyle: ButtonStyle {
     var active = false
+    /// A round glass button, for the bar across the top of the window, as the system's own
+    /// toolbar buttons are. Buttons in the content stay flat.
+    var glass = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Styled(configuration: configuration, active: active)
+        Styled(configuration: configuration, active: active, glass: glass)
     }
 
     struct Styled: View {
         let configuration: Configuration
         let active: Bool
+        let glass: Bool
         @State private var hovering = false
         @Environment(\.isEnabled) private var enabled
 
         var body: some View {
-            configuration.label
+            let label = configuration.label
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(active || hovering ? Theme.text : Theme.secondary)
                 .frame(width: 28, height: 28)
-                .background(Color.primary.opacity(configuration.isPressed ? 0.14 : (active ? 0.1 : (hovering ? 0.07 : 0))),
-                            in: RoundedRectangle(cornerRadius: Theme.smallRadius))
-                .contentShape(Rectangle())
-                .opacity(enabled ? 1 : 0.4)
-                .onHover { hovering = $0 }
+            Group {
+                if glass {
+                    label.glassEffect(.regular.tint(active ? Color.primary.opacity(0.12) : nil).interactive(enabled), in: Circle())
+                } else {
+                    label.background(Color.primary.opacity(configuration.isPressed ? 0.14 : (active ? 0.1 : (hovering ? 0.07 : 0))),
+                                     in: RoundedRectangle(cornerRadius: Theme.smallRadius))
+                }
+            }
+            .contentShape(Rectangle())
+            .opacity(enabled ? 1 : 0.4)
+            .onHover { hovering = $0 }
         }
     }
 }

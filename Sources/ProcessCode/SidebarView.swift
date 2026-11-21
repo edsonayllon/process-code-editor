@@ -16,7 +16,7 @@ struct SidebarView: View {
                 HStack(spacing: 4) {
                     Spacer()
                     Button { workspace.sidebarVisible = false } label: { Image(systemName: "sidebar.left") }
-                        .buttonStyle(IconButtonStyle())
+                        .buttonStyle(IconButtonStyle(glass: true))
                         .help("Hide Sidebar (⌘B)")
                 }
                 .padding(.horizontal, 12)
@@ -69,9 +69,9 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 28)
-        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.smallRadius))
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .glassEffect(.regular, in: Capsule())
     }
 
     private func openResult(_ path: String) {

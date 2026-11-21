@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ProcessCode",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("27.0")],
     dependencies: [
         // The terminal emulator (pty, rendering, input).
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),

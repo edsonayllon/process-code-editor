@@ -78,7 +78,7 @@ struct TopBar: View {
                         .frame(width: 54, height: 16)
                     if workspace.sidebarVisible { Spacer(minLength: 0) }
                     Button { workspace.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
-                        .buttonStyle(IconButtonStyle())
+                        .buttonStyle(IconButtonStyle(glass: true))
                         .help(workspace.sidebarVisible ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)")
                 }
                 .frame(width: workspace.sidebarVisible ? workspace.sidebarWidth - 12 - 19 : nil)
@@ -87,7 +87,7 @@ struct TopBar: View {
                 // Room for the window's buttons, which the sidebar otherwise holds.
                 Color.clear.frame(width: 64)
                 Button { workspace.sidebarVisible = true } label: { Image(systemName: "sidebar.left") }
-                    .buttonStyle(IconButtonStyle())
+                    .buttonStyle(IconButtonStyle(glass: true))
                     .help("Show Sidebar (⌘B)")
             }
             if workspace.documents.isEmpty {
@@ -122,13 +122,20 @@ struct TopBar: View {
             }
             AgentButton(workspace: workspace)
             Button { workspace.toggleTerminal() } label: { Image(systemName: "rectangle.bottomthird.inset.filled") }
-                .buttonStyle(IconButtonStyle(active: workspace.terminalVisible))
+                .buttonStyle(IconButtonStyle(active: workspace.terminalVisible, glass: true))
                 .disabled(workspace.documents.isEmpty)
                 .help(workspace.terminalVisible ? "Hide Terminal (⇧⌘J)" : "Show Terminal (⇧⌘J)")
         }
         .padding(.leading, inTitleBar ? 19 : 12)
         .padding(.trailing, 12)
         .frame(height: Theme.barHeight)
+        // The sidebar's edge runs on up through the strip, so its button sits in the sidebar's
+        // column rather than floating over the bar.
+        .overlay(alignment: .leading) {
+            if inTitleBar && workspace.sidebarVisible {
+                Theme.border.frame(width: 1).offset(x: workspace.sidebarWidth)
+            }
+        }
         .background { if !inTitleBar { WindowDragArea() } }
     }
 }
@@ -254,7 +261,7 @@ private struct DocumentControls: View {
                     Button { showingLog = true } label: {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.deleted)
                     }
-                    .buttonStyle(IconButtonStyle())
+                    .buttonStyle(IconButtonStyle(glass: true))
                     .help("The build failed. Click for details.")
                     .popover(isPresented: $showingLog, arrowEdge: .bottom) {
                         ScrollView {
@@ -270,7 +277,7 @@ private struct DocumentControls: View {
                     EmptyView()
                 }
                 Button { if workspace.save(document) == false { } } label: { Image(systemName: "hammer") }
-                    .buttonStyle(IconButtonStyle())
+                    .buttonStyle(IconButtonStyle(glass: true))
                     .disabled(document.build == .running)
                     .help("Save and Build PDF (⌘S)")
             }
@@ -280,7 +287,7 @@ private struct DocumentControls: View {
                 mode(.preview, icon: document.isTeX ? "doc.richtext" : "eye", help: document.isTeX ? "PDF" : "Preview")
             }
             .padding(2)
-            .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(Theme.border))
+            .glassEffect(.regular, in: Capsule())
         }
     }
 
@@ -290,7 +297,7 @@ private struct DocumentControls: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(document.mode == mode ? Theme.text : Theme.secondary)
                 .frame(width: 32, height: 24)
-                .background(Color.primary.opacity(document.mode == mode ? 0.1 : 0), in: RoundedRectangle(cornerRadius: Theme.smallRadius))
+                .background(Color.primary.opacity(document.mode == mode ? 0.12 : 0), in: Capsule())
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -302,7 +309,6 @@ private struct DocumentControls: View {
 private struct AgentButton: View {
     let workspace: Workspace
     @ObservedObject private var settings = Settings.shared
-    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -341,9 +347,8 @@ private struct AgentButton: View {
             .frame(width: 28, height: 28)
             .help("Choose which agent starts")
         }
-        .background(Color.primary.opacity(hovering ? 0.1 : 0.06), in: RoundedRectangle(cornerRadius: Theme.radius))
-        .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(Theme.border))
-        .onHover { hovering = $0 }
+        .padding(.leading, 2)
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 

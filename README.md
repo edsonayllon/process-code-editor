@@ -26,7 +26,7 @@ Settings are deliberately few: light, dark or the system's, the code font and it
 
 ## Requirements
 
-- macOS 14 or later, and Xcode's command line tools to build.
+- macOS 27 or later, and Xcode's command line tools to build.
 - `git` for the status colours, and the GitHub CLI to clone from your account (`brew install gh`, then
   `gh auth login` once). For LaTeX, a TeX distribution with `latexmk` (MacTeX, or `brew install basictex`).
 
