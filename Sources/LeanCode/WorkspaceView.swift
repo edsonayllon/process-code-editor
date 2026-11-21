@@ -17,14 +17,20 @@ struct WorkspaceView: View {
                     }, onEnd: workspace.saveState)
                 }
                 VStack(spacing: 0) {
-                    TopBar(workspace: workspace)
-                    Divider1(axis: .horizontal)
+                    // In full screen the top bar is in the window's title bar strip instead.
+                    if !workspace.isFullScreen {
+                        TopBar(workspace: workspace)
+                        Divider1(axis: .horizontal)
+                    }
                     panes
                 }
             }
         }
-        .background(Theme.background)
-        .ignoresSafeArea()
+        .overlay(alignment: .top) { if workspace.isFullScreen { Divider1(axis: .horizontal) } }
+        // The content runs under the title bar, except in full screen, where the title bar is a
+        // strip of its own, holding the top bar, and the content starts below it.
+        .ignoresSafeArea(edges: workspace.isFullScreen ? [.horizontal, .bottom] : .all)
+        .background(Theme.background.ignoresSafeArea())
     }
 
     /// The editor above the terminal, or either one alone.
@@ -54,15 +60,32 @@ struct WorkspaceView: View {
 
 /// Across the top of the content: the open files as tabs, then how the active one is viewed,
 /// the agent launcher and the terminal switch.
-private struct TopBar: View {
+struct TopBar: View {
     @ObservedObject var workspace: Workspace
+    /// In full screen the bar sits in the window's title bar strip, after the window's buttons,
+    /// and holds the sidebar's button whether the sidebar is shown or not.
+    var inTitleBar = false
     @ObservedObject private var settings = Settings.shared
 
     var body: some View {
         HStack(spacing: 8) {
-            if !workspace.sidebarVisible {
+            if inTitleBar {
+                // Laid out as the sidebar's own bar is in a window: the window's buttons at the
+                // left, the sidebar's button at the sidebar's right edge, and the tabs starting
+                // where the content does.
+                HStack(spacing: 8) {
+                    WindowButtons(workspace: workspace)
+                        .frame(width: 54, height: 16)
+                    if workspace.sidebarVisible { Spacer(minLength: 0) }
+                    Button { workspace.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
+                        .buttonStyle(IconButtonStyle())
+                        .help(workspace.sidebarVisible ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)")
+                }
+                .frame(width: workspace.sidebarVisible ? workspace.sidebarWidth - 12 - 19 : nil)
+                .padding(.trailing, workspace.sidebarVisible ? 17 : 0)
+            } else if !workspace.sidebarVisible {
                 // Room for the window's buttons, which the sidebar otherwise holds.
-                if !workspace.isFullScreen { Color.clear.frame(width: 64) }
+                Color.clear.frame(width: 64)
                 Button { workspace.sidebarVisible = true } label: { Image(systemName: "sidebar.left") }
                     .buttonStyle(IconButtonStyle())
                     .help("Show Sidebar (⌘B)")
@@ -103,10 +126,72 @@ private struct TopBar: View {
                 .disabled(workspace.documents.isEmpty)
                 .help(workspace.terminalVisible ? "Hide Terminal (⇧⌘J)" : "Show Terminal (⇧⌘J)")
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, inTitleBar ? 19 : 12)
+        .padding(.trailing, 12)
         .frame(height: Theme.barHeight)
-        .background(WindowDragArea())
+        .background { if !inTitleBar { WindowDragArea() } }
     }
+}
+
+/// The window's close, minimise and zoom buttons, for the top bar in full screen: there the
+/// system shows its own only while the menu bar is down, and these are always on screen.
+private struct WindowButtons: NSViewRepresentable {
+    let workspace: Workspace
+
+    final class Group: NSView {
+        weak var workspace: Workspace?
+        private var hovering = false
+
+        private var workspaceWindow: NSWindow? {
+            NSApp.windows.first { ($0.windowController as? WorkspaceWindowController)?.workspace === workspace }
+        }
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+            let kinds: [(NSWindow.ButtonType, Selector)] = [(.closeButton, #selector(close)), (.miniaturizeButton, #selector(close)), (.zoomButton, #selector(leaveFullScreen))]
+            for (index, kind) in kinds.enumerated() {
+                guard let button = NSWindow.standardWindowButton(kind.0, for: style) else { continue }
+                button.target = self
+                button.action = kind.1
+                // A full screen window can't be minimised.
+                if kind.0 == .miniaturizeButton { button.isEnabled = false }
+                button.setFrameOrigin(NSPoint(x: CGFloat(index) * 20, y: 0))
+                addSubview(button)
+            }
+        }
+
+        required init?(coder: NSCoder) { fatalError() }
+
+        @objc private func close() { workspaceWindow?.performClose(nil) }
+        @objc private func leaveFullScreen() { workspaceWindow?.toggleFullScreen(nil) }
+
+        // The buttons ask the view around them whether the pointer is over the group, to show
+        // their symbols on all three at once.
+        @objc func _mouseInGroup(_ button: NSButton) -> Bool { hovering }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+        }
+
+        override func mouseEntered(with event: NSEvent) { setHovering(true) }
+        override func mouseExited(with event: NSEvent) { setHovering(false) }
+
+        private func setHovering(_ value: Bool) {
+            hovering = value
+            subviews.forEach { $0.needsDisplay = true }
+        }
+    }
+
+    func makeNSView(context: Context) -> Group {
+        let group = Group(frame: NSRect(x: 0, y: 0, width: 54, height: 16))
+        group.workspace = workspace
+        return group
+    }
+
+    func updateNSView(_ group: Group, context: Context) {}
 }
 
 /// A tab in either bar: a rounded plate when selected, a close button on hover.

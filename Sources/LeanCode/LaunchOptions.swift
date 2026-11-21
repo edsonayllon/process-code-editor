@@ -123,7 +123,7 @@ struct LaunchOptions {
             DispatchQueue.main.asyncAfter(deadline: .now() + max(delay - 0.5, 1)) {
                 print("fullscreen:", window.styleMask.contains(.fullScreen), "toolbar visible:", window.toolbar?.isVisible ?? false)
                 for w in NSApp.windows where w.isVisible {
-                    // The title bar's own window should stay clear (alpha 0) until it's called down.
+                    // The title bar's own window should sit across the top of the screen.
                     print("window:", String(describing: Swift.type(of: w)), w.frame, "alpha:", w.alphaValue)
                 }
             }

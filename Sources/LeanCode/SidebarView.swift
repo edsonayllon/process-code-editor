@@ -9,18 +9,20 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             // The window's close, minimise and zoom buttons sit at the left of this bar. In full
-            // screen they're hidden, and the button takes their place, where the top bar's
-            // Show Sidebar button also is.
-            HStack(spacing: 4) {
-                if !workspace.isFullScreen { Spacer() }
-                Button { workspace.sidebarVisible = false } label: { Image(systemName: "sidebar.left") }
-                    .buttonStyle(IconButtonStyle())
-                    .help("Hide Sidebar (⌘B)")
-                if workspace.isFullScreen { Spacer() }
+            // screen they and the sidebar's button are in the title bar strip above.
+            if workspace.isFullScreen {
+                Color.clear.frame(height: 12)
+            } else {
+                HStack(spacing: 4) {
+                    Spacer()
+                    Button { workspace.sidebarVisible = false } label: { Image(systemName: "sidebar.left") }
+                        .buttonStyle(IconButtonStyle())
+                        .help("Hide Sidebar (⌘B)")
+                }
+                .padding(.horizontal, 12)
+                .frame(height: Theme.barHeight)
+                .background(WindowDragArea())
             }
-            .padding(.horizontal, 12)
-            .frame(height: Theme.barHeight)
-            .background(WindowDragArea())
 
             filterField
                 .padding(.horizontal, 12)

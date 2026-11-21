@@ -16,6 +16,9 @@ enum Main {
 
 /// One window on one folder.
 final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
+    /// The top bar while it's in the title bar strip, in full screen.
+    private var titleBar: NSView?
+
     let workspace: Workspace
     var onClose: ((WorkspaceWindowController) -> Void)?
 
@@ -66,25 +69,51 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmClose() }
 
-    // In full screen a toolbar stays on screen as a band of its own over the top of the content,
-    // which hid the app's bars. This one is empty and only sizes the title bar, so it goes while
-    // the window is full screen, and the title bar then slides down over the content on demand.
+    // In full screen the toolbar is a strip of its own across the top of the screen, a window in
+    // front of this one. The app's top bar moves into that strip while the window is full screen,
+    // with the window's buttons at its left, so the strip is the top bar and no row is spent on
+    // the buttons alone. Hiding the toolbar there instead made the terminal's redraws reach the
+    // screen several keystrokes at a time, so it stays.
     func windowWillEnterFullScreen(_ notification: Notification) {
-        window?.toolbar?.isVisible = false
         workspace.isFullScreen = true
     }
 
-    func windowWillExitFullScreen(_ notification: Notification) {
-        workspace.isFullScreen = false
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        guard titleBar == nil, let window,
+              let strip = window.childWindows?.first(where: { $0.className.contains("ToolbarFullScreen") }),
+              let container = strip.contentView?.subviews.last(where: { !$0.isHidden && $0.frame.height > 0 }),
+              let parent = container.superview else { return }
+        // Over the system's title bar rather than as a toolbar item: the toolbar moves its items
+        // aside when the menu bar comes down, and nothing in this bar should move.
+        let bar = NSHostingView(rootView: TopBar(workspace: workspace, inTitleBar: true))
+        bar.frame = container.frame
+        bar.autoresizingMask = [.width]
+        parent.addSubview(bar, positioned: .above, relativeTo: container)
+        titleBar = bar
+        setSystemButtons(hidden: true)
     }
 
-    func windowDidExitFullScreen(_ notification: Notification) {
-        window?.toolbar?.isVisible = true
+    /// The top bar has the window's buttons of its own in full screen, always visible, so the
+    /// system's, which come down with the menu bar, would be a second set under them.
+    private func setSystemButtons(hidden: Bool) {
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window?.standardWindowButton(kind)?.isHidden = hidden
+        }
+    }
+
+    func windowWillExitFullScreen(_ notification: Notification) {
+        leaveFullScreen()
     }
 
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
-        window.toolbar?.isVisible = true
+        leaveFullScreen()
+    }
+
+    private func leaveFullScreen() {
         workspace.isFullScreen = false
+        titleBar?.removeFromSuperview()
+        titleBar = nil
+        setSystemButtons(hidden: false)
     }
 
     func windowWillClose(_ notification: Notification) {
