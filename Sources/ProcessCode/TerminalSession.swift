@@ -19,7 +19,7 @@ final class LeanTerminalView: LocalProcessTerminalView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             nativeBackgroundColor = Theme.backgroundNS.usingColorSpace(.sRGB) ?? .black
             nativeForegroundColor = Theme.textNS.usingColorSpace(.sRGB) ?? .white
-            caretColor = Theme.textNS.usingColorSpace(.sRGB) ?? .white
+            caretColor = Theme.accentNS.usingColorSpace(.sRGB) ?? .white
             selectedTextBackgroundColor = Theme.selectionNS.usingColorSpace(.sRGB) ?? .selectedTextBackgroundColor
         }
         installColors(Theme.ansiColors(dark: dark).map { hex in

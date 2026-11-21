@@ -23,6 +23,7 @@ struct SettingsView: View {
                     ForEach(Appearance.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .tint(Theme.accentFill)
                 Picker("Font", selection: $settings.fontName) {
                     ForEach(settings.availableFonts, id: \.self) { name in
                         Text(Settings.fontTitle(name)).tag(name)
@@ -32,7 +33,9 @@ struct SettingsView: View {
                     LabeledContent("Size", value: "\(Int(settings.fontSize)) pt")
                 }
                 Toggle("Margins beside the terminal in a wide window", isOn: $settings.margins)
+                    .tint(Theme.accentFill)
                 Toggle("Spotlight: fade the bars away while the terminal is alone", isOn: $settings.spotlight)
+                    .tint(Theme.accentFill)
                 Text("func greet(name: String) -> String { \"Hello, \\(name)\" }")
                     .font(Font(settings.codeFont))
                     .foregroundStyle(Theme.secondary)
@@ -66,6 +69,7 @@ struct SettingsView: View {
                         .font(.system(size: 13, design: .monospaced))
                 }
                 Toggle("Start it when a folder opens", isOn: $settings.startAgentOnOpen)
+                    .tint(Theme.accentFill)
             } header: {
                 Text("Coding Agent")
             } footer: {

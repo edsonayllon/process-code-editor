@@ -236,7 +236,7 @@ struct Tab: View {
     var body: some View {
         HStack(spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: selected ? .medium : .regular))
+                .font(.system(size: 13, weight: selected ? .medium : .regular))
                 .foregroundStyle(selected ? Theme.text : Theme.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: 200)
@@ -337,7 +337,7 @@ private struct AgentButton: View {
             Button { workspace.startAgent() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "play.fill").font(.system(size: 10))
-                    Text(settings.agent?.name ?? "Choose Agent").font(.system(size: 12, weight: .medium))
+                    Text(settings.agent?.name ?? "Choose Agent").font(.system(size: 13, weight: .medium))
                 }
                 .foregroundStyle(Theme.text)
                 .padding(.leading, 12)
@@ -386,7 +386,7 @@ private struct DocumentView: View {
             if document.changedOnDisk {
                 HStack(spacing: 12) {
                     Text("This file changed on disk while you were editing it.")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                         .foregroundStyle(Theme.text)
                     Spacer()
                     Button("Keep Mine") { document.changedOnDisk = false }
@@ -452,6 +452,9 @@ private struct TerminalPanel: View {
     let width: CGFloat
     @ObservedObject private var settings = Settings.shared
 
+    /// The editor is showing above the terminal.
+    private var underEditor: Bool { workspace.editorShown && workspace.activeDocument != nil }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
@@ -495,11 +498,24 @@ private struct TerminalPanel: View {
             .padding(.horizontal, 12)
             .frame(height: 40)
             .fadesInFocusMode(workspace)
+            // With the bars faded, the folder's name stays, over the terminal's text and starting
+            // where it starts, so one focused window can be told from another.
+            .overlay(alignment: .leading) {
+                Text(workspace.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 12 + (settings.margins ? Settings.sideMargin(available: width - 12, readable: settings.readableWidth) : 0))
+                    .opacity(workspace.barsHidden ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.25), value: workspace.barsHidden)
+                    .allowsHitTesting(false)
+            }
             .background(BarDoubleClick { if !workspace.documents.isEmpty { workspace.toggleTerminalMaximized() } })
             .background(BarHover(workspace: workspace))
 
             if let session = workspace.activeTerminal {
-                ReadableColumn(leading: 12, onMarginClick: session.focus) {
+                // Under the editor the text starts where the code does; alone, the column is centred.
+                ReadableColumn(leading: underEditor ? settings.codeLeading : 12, centred: !underEditor, onMarginClick: session.focus) {
                     TerminalHost(session: session, focusToken: workspace.terminalFocusToken)
                 }
                 .padding(.bottom, 8)
@@ -516,10 +532,12 @@ private struct TerminalPanel: View {
 /// Keeps the terminal's wide text readable: in a pane wider than a line reads well at, the
 /// content is held to a centred column with empty margins either side. A narrower pane is filled
 /// as before. The editor has no margins. The width changes in one step, because every width in
-/// between would resize the terminal.
+/// between would resize the terminal. Not `centred`, the column starts at `leading` and all the
+/// spare room is at the right.
 private struct ReadableColumn<Content: View>: View {
     /// Space always kept at the left, margins or not.
     var leading: CGFloat = 0
+    var centred = true
     /// A click in a margin goes to the content, as it would if the text reached that far.
     var onMarginClick: () -> Void = {}
     @ViewBuilder let content: Content
@@ -527,11 +545,12 @@ private struct ReadableColumn<Content: View>: View {
 
     var body: some View {
         GeometryReader { area in
+            let spare = settings.margins ? max(0, area.size.width - leading - settings.readableWidth).rounded(.down) : 0
             let margin = settings.margins ? Settings.sideMargin(available: area.size.width - leading, readable: settings.readableWidth) : 0
             HStack(spacing: 0) {
-                edge(width: leading + margin)
+                edge(width: leading + (centred ? margin : 0))
                 content
-                edge(width: margin)
+                edge(width: centred ? margin : spare)
             }
         }
     }

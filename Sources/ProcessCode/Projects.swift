@@ -10,6 +10,8 @@ struct Project: Identifiable, Equatable {
     /// Lives outside the projects folder, and is listed because it was opened here.
     var isExternal = false
     var branch: String?
+    /// The names a repository's main branch usually has, which the list leaves out.
+    static let usualBranches: Set<String> = ["main", "master"]
     var remote: String?
     var changes = 0
     var ahead = 0

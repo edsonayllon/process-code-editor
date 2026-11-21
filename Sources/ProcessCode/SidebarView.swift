@@ -52,6 +52,7 @@ struct SidebarView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.tertiary)
             TextField("Go to file", text: $workspace.filter)
+                .tint(Theme.accent)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .focused($filterFocused)
@@ -90,7 +91,7 @@ struct SidebarView: View {
                 }
                 if workspace.filterResults.isEmpty {
                     Text("No files match")
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.tertiary)
                         .padding(.top, 24)
                 }
@@ -154,7 +155,7 @@ struct SidebarView: View {
                 }
                 if changes.isEmpty {
                     Text(workspace.git.isRepository ? "No changes" : "Not a git repository")
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.tertiary)
                         .padding(.top, 24)
                 }
@@ -173,15 +174,15 @@ struct SidebarView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.secondary)
                 Text(branch)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if workspace.git.ahead > 0 { Text("↑\(workspace.git.ahead)").font(.system(size: 12)).foregroundStyle(Theme.tertiary) }
-                if workspace.git.behind > 0 { Text("↓\(workspace.git.behind)").font(.system(size: 12)).foregroundStyle(Theme.tertiary) }
+                if workspace.git.ahead > 0 { Text("↑\(workspace.git.ahead)").font(.system(size: 11)).foregroundStyle(Theme.tertiary) }
+                if workspace.git.behind > 0 { Text("↓\(workspace.git.behind)").font(.system(size: 11)).foregroundStyle(Theme.tertiary) }
             } else {
                 Text(workspace.name)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
             }
@@ -214,7 +215,7 @@ private struct ModeTab: View {
                         .foregroundStyle(selected ? Theme.secondary : Theme.tertiary)
                 }
             }
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(selected ? Theme.text : (hovering ? Theme.text : Theme.secondary))
             .padding(.horizontal, 8)
             .frame(height: 24)
@@ -232,16 +233,6 @@ private struct TreeRowView: View {
     @ObservedObject var workspace: Workspace
     @State private var hovering = false
 
-    private var icon: String {
-        if row.isDirectory { return "folder" }
-        switch row.url.pathExtension.lowercased() {
-        case "md", "markdown", "txt", "tex": return "doc.text"
-        case "png", "jpg", "jpeg", "gif", "webp", "heic", "svg", "icns": return "photo"
-        case "pdf": return "doc.richtext"
-        default: return "doc"
-        }
-    }
-
     var body: some View {
         let state = workspace.git.state(of: row.relativePath, isDirectory: row.isDirectory)
         let selected = workspace.selectedPath == row.url.path
@@ -252,10 +243,6 @@ private struct TreeRowView: View {
                 .rotationEffect(.degrees(workspace.isExpanded(row) ? 90 : 0))
                 .opacity(row.isDirectory ? 1 : 0)
                 .frame(width: 10)
-            Image(systemName: icon)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 16)
             Text(row.name)
                 .font(.system(size: 13))
                 .foregroundStyle(nameColor(state))
@@ -328,7 +315,7 @@ private struct PathRow: View {
                 .lineLimit(1)
                 .layoutPriority(1)
             Text(directory)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundStyle(Theme.tertiary)
                 .lineLimit(1)
                 .truncationMode(.head)

@@ -80,32 +80,6 @@ final class CodeTextView: NSTextView {
         setSelectedRange(NSRange(location: range.location, length: max(length, 0)))
     }
 
-    // The line holding the insertion point gets a faint band.
-    override func drawBackground(in rect: NSRect) {
-        super.drawBackground(in: rect)
-        guard selectedRange().length == 0, let layoutManager, let textContainer else { return }
-        let location = selectedRange().location
-        var lineRect: NSRect
-        if location >= (string as NSString).length, layoutManager.extraLineFragmentTextContainer != nil {
-            lineRect = layoutManager.extraLineFragmentRect
-        } else {
-            let glyph = layoutManager.glyphIndexForCharacter(at: min(location, max((string as NSString).length - 1, 0)))
-            guard layoutManager.numberOfGlyphs > 0 else { return }
-            lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
-        }
-        _ = textContainer
-        lineRect.origin.x = 0
-        lineRect.origin.y += textContainerInset.height
-        lineRect.size.width = bounds.width
-        Theme.currentLineNS.setFill()
-        lineRect.intersection(rect).fill()
-    }
-
-    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
-        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-        needsDisplay = true
-    }
-
     // Paste and drop as plain text only.
     override func paste(_ sender: Any?) { pasteAsPlainText(sender) }
 }
@@ -120,9 +94,18 @@ final class GutterView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// Room for four digits whatever the file's length, so the code starts at the same place in
+    /// every file up to 9,999 lines, and the terminal's text can start there too.
+    static let minimumDigits = 4
+    /// How far the code's first character is from the gutter's right edge: the text view's inset
+    /// and its container's padding.
+    static let textInset: CGFloat = 9
+
     /// Wide enough for the largest line number, with room either side.
-    var preferredWidth: CGFloat {
-        let digits = max(String(lineStarts.count).count, 2)
+    var preferredWidth: CGFloat { GutterView.width(lines: lineStarts.count, font: font) }
+
+    static func width(lines: Int, font: NSFont) -> CGFloat {
+        let digits = max(String(lines).count, minimumDigits)
         return ceil(CGFloat(digits) * ("8" as NSString).size(withAttributes: [.font: font]).width) + 28
     }
 
@@ -355,13 +338,13 @@ final class EditorController: NSObject, NSTextViewDelegate {
         textView.font = font
         textView.textColor = Theme.textNS
         textView.backgroundColor = Theme.backgroundNS
-        textView.insertionPointColor = Theme.textNS
+        textView.insertionPointColor = Theme.accentNS
         textView.selectedTextAttributes = [.backgroundColor: Theme.selectionNS]
         textView.defaultParagraphStyle = paragraphStyle
         textView.typingAttributes = [.font: font, .foregroundColor: Theme.textNS, .paragraphStyle: paragraphStyle]
         applyParagraphStyle()
         container.scrollView.backgroundColor = Theme.backgroundNS
-        container.gutter.font = Settings.font(named: Settings.shared.fontName, size: max(font.pointSize - 2, 9))
+        container.gutter.font = Settings.shared.gutterFont
         container.needsLayout = true
         container.gutter.needsDisplay = true
     }

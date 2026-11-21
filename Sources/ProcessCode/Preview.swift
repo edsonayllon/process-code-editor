@@ -275,7 +275,7 @@ struct ImagePreview: View {
                     .frame(maxWidth: image.size.width, maxHeight: image.size.height)
                 if let rep = image.representations.first {
                     Text("\(rep.pixelsWide) × \(rep.pixelsHigh)")
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.secondary)
                 }
             } else {
@@ -305,7 +305,7 @@ struct MessageView<Actions: View>: View {
                 .foregroundStyle(Theme.secondary)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.tertiary)
                     .multilineTextAlignment(.center)
             }

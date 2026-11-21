@@ -48,6 +48,7 @@ struct ProjectsView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.tertiary)
                 TextField("Filter projects", text: $store.search)
+                    .tint(Theme.accent)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .focused($filterFocused)
@@ -72,7 +73,7 @@ struct ProjectsView: View {
                 Spacer(minLength: 8)
                 Text(store.projects.count == 1 ? "1 project" : "\(store.projects.count) projects")
             }
-            .font(.system(size: 12))
+            .font(.system(size: 11))
             .foregroundStyle(Theme.tertiary)
             .padding(.horizontal, 24)
             .frame(height: 40)
@@ -155,10 +156,6 @@ private struct ProjectRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: project.isRepository ? "folder" : "folder.badge.questionmark")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 20)
             Text(project.name)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Theme.text)
@@ -168,9 +165,14 @@ private struct ProjectRow: View {
                 Circle().fill(Theme.accent).frame(width: 6, height: 6)
                     .help("Open in a window")
             }
+            if !project.isRepository {
+                Text("no git")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.tertiary)
+            }
             if project.isExternal {
                 Text((((project.path as NSString).deletingLastPathComponent) as NSString).abbreviatingWithTildeInPath)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.tertiary)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -185,11 +187,12 @@ private struct ProjectRow: View {
                 if project.ahead > 0 { Text("↑\(project.ahead)").foregroundStyle(Theme.secondary).help("Commits to push") }
                 if project.behind > 0 { Text("↓\(project.behind)").foregroundStyle(Theme.secondary).help("Commits to pull") }
             }
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .monospacedDigit()
-            if let branch = project.branch {
+            // The usual branch goes without saying; any other is worth seeing.
+            if let branch = project.branch, !Project.usualBranches.contains(branch) {
                 Text(branch)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -197,7 +200,7 @@ private struct ProjectRow: View {
                     .fixedSize()
             }
             Text(project.activity == .distantPast ? "" : Project.age(of: project.activity))
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .monospacedDigit()
                 .foregroundStyle(Theme.tertiary)
                 .frame(width: 32, alignment: .trailing)
@@ -229,7 +232,7 @@ struct PlateButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.system(size: 12, weight: prominent ? .semibold : .medium))
+                .font(.system(size: 13, weight: prominent ? .semibold : .medium))
                 .foregroundStyle(prominent ? Theme.background : Theme.text)
                 .lineLimit(1)
                 .padding(.horizontal, 12)
@@ -267,7 +270,7 @@ private struct SheetFrame<Content: View>: View {
             content
             if let error {
                 Text(error)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.deleted)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -275,7 +278,7 @@ private struct SheetFrame<Content: View>: View {
             HStack(spacing: 8) {
                 if busy {
                     ProgressView().controlSize(.small)
-                    Text(busyText).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    Text(busyText).font(.system(size: 11)).foregroundStyle(Theme.secondary)
                 }
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -312,6 +315,7 @@ private extension View {
     /// A text field drawn in the app's own style.
     func field() -> some View {
         textFieldStyle(.plain)
+            .tint(Theme.accent)
             .font(.system(size: 13))
             .padding(.horizontal, 12)
             .frame(height: 32)
@@ -356,7 +360,7 @@ private struct CloneSheet: View {
                 ForEach(Source.allCases) { tab in
                     Button { source = tab } label: {
                         Text(tab.rawValue)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(source == tab ? Theme.text : Theme.secondary)
                             .padding(.horizontal, 8)
                             .frame(height: 24)
@@ -374,7 +378,7 @@ private struct CloneSheet: View {
                 Spacer(minLength: 0)
             }
             Text("Clones into \((root as NSString).abbreviatingWithTildeInPath)")
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundStyle(Theme.tertiary)
         }
         .frame(width: 480, height: 500)
@@ -422,12 +426,12 @@ private struct CloneSheet: View {
                     ProgressView().controlSize(.small).padding(.top, 24)
                 } else if let loadError {
                     Text(loadError)
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.secondary)
                         .multilineTextAlignment(.center)
                         .padding(24)
                 } else if shown.isEmpty {
-                    Text("No repositories match").font(.system(size: 12)).foregroundStyle(Theme.tertiary).padding(.top, 24)
+                    Text("No repositories match").font(.system(size: 11)).foregroundStyle(Theme.tertiary).padding(.top, 24)
                 }
             }
             .padding(4)
@@ -455,7 +459,7 @@ private struct NewRepositorySheet: View {
             Toggle("Start with a README and a first commit", isOn: $readme)
                 .font(.system(size: 13))
             Text("Created in \((root as NSString).abbreviatingWithTildeInPath). Publish it to GitHub from Lean GitHub or with gh.")
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundStyle(Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }

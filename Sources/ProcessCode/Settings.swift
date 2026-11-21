@@ -65,6 +65,12 @@ final class Settings: ObservableObject {
     static func fontTitle(_ name: String) -> String { name.isEmpty ? "SF Mono" : name }
 
     var codeFont: NSFont { Settings.font(named: fontName, size: fontSize) }
+    /// The line numbers are two points smaller than the code.
+    var gutterFont: NSFont { Settings.font(named: fontName, size: max(fontSize - 2, 9)) }
+
+    /// How far from the editor's left edge the code starts, in a file of ordinary length. The
+    /// terminal's text starts here too while the editor is above it, so the two share an edge.
+    var codeLeading: CGFloat { GutterView.width(lines: 1, font: gutterFont) + GutterView.textInset }
 
     static func font(named name: String, size: Double) -> NSFont {
         if !name.isEmpty {

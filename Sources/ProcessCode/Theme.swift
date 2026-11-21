@@ -30,24 +30,28 @@ extension NSColor {
 
 /// One palette, one radius family and one spacing scale (multiples of 4) for the whole app.
 /// The colours are dark-grey neutrals (not near-black, which glares against light text) with a single
-/// green accent. The syntax colours are GitHub's, which is what the code is read against everywhere else;
+/// accent, the periwinkle of the app's icon. The syntax colours are GitHub's, which is what the code is read against everywhere else;
 /// the dark git colours are softer tints of GitHub's hues.
 enum Theme {
     // Surfaces
     static let backgroundNS = NSColor(light: 0xffffff, dark: 0x171918)
     static let sidebarNS = NSColor(light: 0xf5f6f5, dark: 0x1d1f1e)
     static let borderNS = NSColor(light: 0xdcdfdd, dark: 0x303432)
-    static let currentLineNS = NSColor(light: 0xf3f5f4, dark: 0x1e2120)
-    static let selectionNS = NSColor(light: 0xc8e1ff, dark: 0x264a73)
+    /// The accent, washed into the surface.
+    static let selectionNS = NSColor(light: 0xdfe2fd, dark: 0x343a66)
 
     // Text
     static let textNS = NSColor(light: 0x1f2328, dark: 0xdcdfdd)
     static let secondaryNS = NSColor(light: 0x59636e, dark: 0x9a9f9c)
     static let tertiaryNS = NSColor(light: 0x8a929b, dark: 0x808582)
 
-    // Accent and git states. In dark mode green and yellow are lifted to one lightness (OKLCH L 0.82),
+    // The accent is the icon's periwinkle (scripts/make-icon.swift), darkened in light mode to stay legible.
+    // It marks where you are: the caret, the selection, the project that's open.
+    static let accentNS = NSColor(light: 0x4f5bd5, dark: 0xb1b9f9)
+
+    // Git states. In dark mode green and yellow are lifted to one lightness (OKLCH L 0.82),
     // between secondary and primary text, so a changed file never reads dimmer than an unchanged one.
-    static let accentNS = NSColor(light: 0x1a7f37, dark: 0x75df8f)
+    static let addedNS = NSColor(light: 0x1a7f37, dark: 0x75df8f)
     static let modifiedNS = NSColor(light: 0x9a6700, dark: 0xe8be62)
     static let deletedNS = NSColor(light: 0xcf222e, dark: 0xff7b72)
 
@@ -58,6 +62,9 @@ enum Theme {
     static let secondary = Color(nsColor: secondaryNS)
     static let tertiary = Color(nsColor: tertiaryNS)
     static let accent = Color(nsColor: accentNS)
+    /// The accent as a fill behind white, for the system's switches and pickers.
+    static let accentFill = Color(nsColor: NSColor(light: 0x4f5bd5, dark: 0x6f7ae8))
+    static let added = Color(nsColor: addedNS)
     static let modified = Color(nsColor: modifiedNS)
     static let deleted = Color(nsColor: deletedNS)
 
@@ -93,13 +100,15 @@ enum Theme {
     static let syntaxFunction = NSColor(light: 0x8250df, dark: 0xd2a8ff)
     static let syntaxTag = NSColor(light: 0x116329, dark: 0x7ee787)
 
-    /// The sixteen ANSI colours for the terminal, normal then bright.
+    /// The sixteen ANSI colours for the terminal, normal then bright. The greys that agents write their
+    /// secondary text in (bright black in dark, the whites in light) keep 4.5:1 against the background.
+    /// Black in dark stays dark, since it's mostly used as a background.
     static func ansiColors(dark: Bool) -> [UInt32] {
         dark
             ? [0x484f58, 0xff7b72, 0x3fb950, 0xd29922, 0x58a6ff, 0xbc8cff, 0x39c5cf, 0xb1bac4,
-               0x6e7681, 0xffa198, 0x56d364, 0xe3b341, 0x79c0ff, 0xd2a8ff, 0x56d4dd, 0xffffff]
-            : [0x24292f, 0xcf222e, 0x116329, 0x7d4e00, 0x0969da, 0x8250df, 0x1b7c83, 0x6e7781,
-               0x57606a, 0xa40e26, 0x1a7f37, 0x633c01, 0x218bff, 0xa475f9, 0x3192aa, 0x8c959f]
+               0x8b949e, 0xffa198, 0x56d364, 0xe3b341, 0x79c0ff, 0xd2a8ff, 0x56d4dd, 0xffffff]
+            : [0x24292f, 0xcf222e, 0x116329, 0x7d4e00, 0x0969da, 0x8250df, 0x1b7c83, 0x656d76,
+               0x57606a, 0xa40e26, 0x1a7f37, 0x633c01, 0x218bff, 0xa475f9, 0x3192aa, 0x6e7781]
     }
 }
 
@@ -107,7 +116,7 @@ extension GitState {
     var color: Color {
         switch self {
         case .modified, .renamed: return Theme.modified
-        case .added, .untracked: return Theme.accent
+        case .added, .untracked: return Theme.added
         case .deleted, .conflicted: return Theme.deleted
         case .ignored: return Theme.tertiary
         }
