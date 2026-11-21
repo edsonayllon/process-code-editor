@@ -80,7 +80,8 @@ struct SidebarView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(Array(workspace.filterResults.enumerated()), id: \.element) { index, path in
-                    PathRow(path: path, state: workspace.git.state(of: path, isDirectory: false), selected: index == 0) { openResult(path) }
+                    PathRow(path: path, url: workspace.root.appendingPathComponent(path),
+                            state: workspace.git.state(of: path, isDirectory: false), selected: index == 0) { openResult(path) }
                 }
                 if workspace.filterResults.isEmpty {
                     Text("No files match")
@@ -141,7 +142,7 @@ struct SidebarView: View {
                 let changes = workspace.git.changes
                 ForEach(changes, id: \.path) { change in
                     let url = workspace.root.appendingPathComponent(change.path)
-                    PathRow(path: change.path, state: change.state, selected: workspace.selectedPath == url.path) {
+                    PathRow(path: change.path, url: url, state: change.state, selected: workspace.selectedPath == url.path) {
                         workspace.selectedPath = url.path
                         workspace.open(url)
                     }
@@ -220,7 +221,7 @@ private struct ModeTab: View {
     }
 }
 
-/// A file or folder in the tree.
+/// A file or folder in the tree. Dragging it onto the terminal types its path, as from Finder.
 private struct TreeRowView: View {
     let row: TreeRow
     @ObservedObject var workspace: Workspace
@@ -272,6 +273,7 @@ private struct TreeRowView: View {
         .background(Color.primary.opacity(selected ? 0.1 : (hovering ? 0.05 : 0)), in: RoundedRectangle(cornerRadius: Theme.smallRadius))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onDrag { NSItemProvider(object: row.url as NSURL) }
         .onTapGesture {
             workspace.selectedPath = row.url.path
             if row.isDirectory { workspace.toggle(row) } else { workspace.open(row.url) }
@@ -305,6 +307,7 @@ private struct TreeRowView: View {
 /// A file shown by its path: the name, then its folder, quieter. Used for changes and search results.
 private struct PathRow: View {
     let path: String
+    let url: URL
     let state: GitState?
     let selected: Bool
     let action: () -> Void
@@ -336,6 +339,7 @@ private struct PathRow: View {
         .background(Color.primary.opacity(selected ? 0.1 : (hovering ? 0.05 : 0)), in: RoundedRectangle(cornerRadius: Theme.smallRadius))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onDrag { NSItemProvider(object: url as NSURL) }
         .onTapGesture(perform: action)
     }
 }

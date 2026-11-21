@@ -5,7 +5,7 @@ used for in that setup, in a 4 MB app that idles around 60 MB of memory instead 
 
 - **A terminal** that opens in the folder with your agent already running (Claude Code by default; Codex, Gemini or
   any command you name). Tabs for more shells. Pasting a copied image works (⌘V), as does Shift-Return for a new
-  line in the agent's prompt, and dropping files on the terminal types their paths.
+  line in the agent's prompt, and dropping files on the terminal, from Finder or the sidebar, types their paths.
 - **One keystroke for a full-height terminal.** ⌘J, the button at the right of the terminal's bar, or a double
   click on that bar gives the terminal the whole window; the same again brings the editor back. Opening a file
   brings the editor back by itself.
