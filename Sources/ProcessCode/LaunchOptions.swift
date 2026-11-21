@@ -37,6 +37,9 @@ struct LaunchOptions {
     var hit: NSPoint?
     /// Starts the window in full screen and prints which windows the app has on screen then.
     var fullScreen = false
+    /// With `--fullscreen`: leaves full screen again before the picture, which checks that the
+    /// window's own top bar comes back.
+    var exitFullScreen = false
 
     init() {}
 
@@ -66,6 +69,7 @@ struct LaunchOptions {
             case "--switch-to": switchTo = value().flatMap(Appearance.init(rawValue:))
             case "--shift-return": shiftReturn = true
             case "--fullscreen": fullScreen = true
+            case "--exit-fullscreen": fullScreen = true; exitFullScreen = true
             case "--hit":
                 let parts = (value() ?? "").split(separator: ",").compactMap { Double($0) }
                 if parts.count == 2 { hit = NSPoint(x: parts[0], y: parts[1]) }
@@ -120,6 +124,9 @@ struct LaunchOptions {
         if fullScreen {
             NSApp.activate(ignoringOtherApps: true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { window.toggleFullScreen(nil) }
+            if exitFullScreen {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { window.toggleFullScreen(nil) }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + max(delay - 0.5, 1)) {
                 print("fullscreen:", window.styleMask.contains(.fullScreen), "toolbar visible:", window.toolbar?.isVisible ?? false)
                 for w in NSApp.windows where w.isVisible {
@@ -173,7 +180,19 @@ struct LaunchOptions {
                 print("hit:", chain.joined(separator: " < "))
             }
         }
-        if snapshot != nil { capture(window) }
+        if snapshot != nil {
+            // What the terminal holds when the picture is taken. A window that isn't visible
+            // (behind another, or on another Space) may not have drawn its terminal, and the
+            // picture then shows it empty though the text is there.
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay - 0.1) {
+                guard let view = workspace.activeTerminal?.view else { return }
+                let text = String(decoding: view.getBufferAsData(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                print("terminal frame:", view.frame, "in window:", view.window != nil,
+                      "focused:", window.firstResponder === view, "key:", window.isKeyWindow, "visible:", window.occlusionState.contains(.visible),
+                      "characters:", text.count, "first line:", text.components(separatedBy: "\n").first ?? "")
+            }
+            capture(window)
+        }
     }
 
     @MainActor

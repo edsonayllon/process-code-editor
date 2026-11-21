@@ -14,10 +14,21 @@ enum Main {
     }
 }
 
+/// The space under the full-screen toolbar strip, which keeps its own height: AppKit stretches an
+/// accessory to its 36 points while the menu bar is down, and the strip then grew a blank band
+/// over the content each time the menu bar came down.
+private final class StripSpace: NSView {
+    override func setFrameSize(_ size: NSSize) {
+        super.setFrameSize(NSSize(width: size.width, height: Theme.barHeight - 40))
+    }
+}
+
 /// One window on one folder.
 final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     /// The top bar while it's in the title bar strip, in full screen.
     private var titleBar: NSView?
+    /// Space under the full-screen toolbar strip that makes it as tall as the window's top bar.
+    private var stripPadding: NSTitlebarAccessoryViewController?
 
     let workspace: Workspace
     var onClose: ((WorkspaceWindowController) -> Void)?
@@ -39,7 +50,12 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.representedURL = workspace.root
-        window.contentView = NSHostingView(rootView: WorkspaceView(workspace: workspace))
+        let hosting = NSHostingView(rootView: WorkspaceView(workspace: workspace))
+        // The title bar is taller than the top bar since macOS 26, and SwiftUI leaves out what it
+        // would draw in the title bar's safe area, the whole top bar. The content runs under the
+        // title bar anyway, so it has no safe area there (full screen puts it back).
+        hosting.safeAreaRegions = []
+        window.contentView = hosting
         window.center()
         if Workspace.remembersState { window.setFrameAutosaveName("workspace." + workspace.root.path) }
         super.init(window: window)
@@ -76,6 +92,21 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     // screen several keystrokes at a time, so it stays.
     func windowWillEnterFullScreen(_ notification: Notification) {
         workspace.isFullScreen = true
+        // The strip is 66 points tall with the unified toolbar, a wide band above and below the
+        // bar's controls, and 40 with the compact one; an accessory under the compact one makes
+        // it the bar's own height, so the bar looks the same in full screen as in a window.
+        window?.toolbarStyle = .unifiedCompact
+        let padding = NSTitlebarAccessoryViewController()
+        let space = StripSpace(frame: NSRect(x: 0, y: 0, width: 1, height: Theme.barHeight - 40))
+        padding.view = space
+        padding.layoutAttribute = .bottom
+        // Its own height, not the system's default for an accessory (see StripSpace).
+        padding.automaticallyAdjustsSize = false
+        padding.fullScreenMinHeight = Theme.barHeight - 40
+        window?.addTitlebarAccessoryViewController(padding)
+        stripPadding = padding
+        // The content starts below the title bar strip there.
+        (window?.contentView as? NSHostingView<WorkspaceView>)?.safeAreaRegions = .all
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
@@ -105,12 +136,24 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         leaveFullScreen()
     }
 
+    /// Again once the window is back: set only as it starts to leave, the safe area could come
+    /// back with the title bar, and SwiftUI then left the whole top bar out of the window.
+    func windowDidExitFullScreen(_ notification: Notification) {
+        (window?.contentView as? NSHostingView<WorkspaceView>)?.safeAreaRegions = []
+    }
+
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
         leaveFullScreen()
     }
 
     private func leaveFullScreen() {
         workspace.isFullScreen = false
+        if let stripPadding, let index = window?.titlebarAccessoryViewControllers.firstIndex(of: stripPadding) {
+            window?.removeTitlebarAccessoryViewController(at: index)
+        }
+        stripPadding = nil
+        window?.toolbarStyle = .unified
+        (window?.contentView as? NSHostingView<WorkspaceView>)?.safeAreaRegions = []
         titleBar?.removeFromSuperview()
         titleBar = nil
         setSystemButtons(hidden: false)
