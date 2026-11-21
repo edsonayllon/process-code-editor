@@ -1,5 +1,5 @@
 import XCTest
-@testable import LeanCode
+@testable import ProcessCode
 
 final class GitStatusTests: XCTestCase {
     func testParsesBranchAndStates() {
@@ -204,7 +204,7 @@ final class TerminalTests: XCTestCase {
     func testEnvironmentDropsTheLaunchersVariables() {
         let env = TerminalSession.environment(["CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "TERM_PROGRAM": "vscode", "HOME": "/Users/x"], shell: "/bin/zsh")
         XCTAssertFalse(env.contains { $0.hasPrefix("CLAUDE") })
-        XCTAssertTrue(env.contains("TERM_PROGRAM=LeanCode"))
+        XCTAssertTrue(env.contains("TERM_PROGRAM=ProcessCode"))
         XCTAssertTrue(env.contains("TERM=xterm-256color"))
         XCTAssertTrue(env.contains("COLORTERM=truecolor"))
         XCTAssertTrue(env.contains("HOME=/Users/x"))
@@ -214,9 +214,9 @@ final class TerminalTests: XCTestCase {
 
 final class WorkspaceTests: XCTestCase {
     func testGoToFileRanksNameMatchesFirst() {
-        let files = ["Sources/LeanCode/Git.swift", "docs/git-notes/intro.md", "Sources/LeanCode/Settings.swift", "README.md"]
-        XCTAssertEqual(Workspace.match("git", in: files).first, "Sources/LeanCode/Git.swift")
-        XCTAssertEqual(Workspace.match("stgs", in: files), ["Sources/LeanCode/Settings.swift"], "letters in order still match")
+        let files = ["Sources/ProcessCode/Git.swift", "docs/git-notes/intro.md", "Sources/ProcessCode/Settings.swift", "README.md"]
+        XCTAssertEqual(Workspace.match("git", in: files).first, "Sources/ProcessCode/Git.swift")
+        XCTAssertEqual(Workspace.match("stgs", in: files), ["Sources/ProcessCode/Settings.swift"], "letters in order still match")
         XCTAssertEqual(Workspace.match("zzz", in: files), [])
     }
 
@@ -227,7 +227,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     func testAgentSetting() {
-        let defaults = UserDefaults(suiteName: "LeanCodeTests.\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!
         let settings = Settings(defaults: defaults)
         XCTAssertEqual(settings.agent?.command, "claude")
         XCTAssertTrue(settings.startAgentOnOpen)

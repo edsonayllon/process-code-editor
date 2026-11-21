@@ -109,7 +109,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
-        env["TERM_PROGRAM"] = "LeanCode"
+        env["TERM_PROGRAM"] = "ProcessCode"
         env["SHELL"] = shell
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         if env["PATH"] == nil { env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin" }

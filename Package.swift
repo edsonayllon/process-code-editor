@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "LeanCode",
+    name: "ProcessCode",
     platforms: [.macOS(.v14)],
     dependencies: [
         // The terminal emulator (pty, rendering, input).
@@ -12,14 +12,14 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "LeanCode",
+            name: "ProcessCode",
             dependencies: [
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "cmark-gfm", package: "swift-cmark"),
                 .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
             ],
-            path: "Sources/LeanCode"
+            path: "Sources/ProcessCode"
         ),
-        .testTarget(name: "LeanCodeTests", dependencies: ["LeanCode"], path: "Tests/LeanCodeTests"),
+        .testTarget(name: "ProcessCodeTests", dependencies: ["ProcessCode"], path: "Tests/ProcessCodeTests"),
     ]
 )

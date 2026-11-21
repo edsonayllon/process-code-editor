@@ -1,4 +1,4 @@
-# Lean Code
+# Process Code
 
 A small native Mac editor for working alongside a coding agent. It does the handful of things VS Code is mostly
 used for in that setup, in a 4 MB app that idles around 60 MB of memory instead of a 1.6 GB one:
@@ -33,7 +33,7 @@ Settings are deliberately few: light, dark or the system's, the code font and it
 ## Build and install
 
 ```sh
-./scripts/build-app.sh --install   # builds and copies Lean Code.app to /Applications
+./scripts/build-app.sh --install   # builds and copies Process Code.app to /Applications
 ./scripts/build-app.sh --update    # the same, then opens the new copy
 swift test                         # runs the tests
 ```
@@ -42,7 +42,7 @@ Without a flag the app is left in `build/`. Open a folder from the app (⌘O), b
 or from a shell:
 
 ```sh
-open -a "Lean Code" ~/Documents/GitHub/resume
+open -a "Process Code" ~/Documents/GitHub/resume
 ```
 
 ## Shortcuts
@@ -93,6 +93,6 @@ preview uses the system's WebKit, so neither adds to the app's size.
 The window can photograph itself, which is how its design is checked:
 
 ```sh
-"build/Lean Code.app/Contents/MacOS/LeanCode" . --shell --open README.md --mode split --layout split \
+"build/Process Code.app/Contents/MacOS/ProcessCode" . --shell --open README.md --mode split --layout split \
     --appearance dark --snapshot /tmp/shot.png
 ```

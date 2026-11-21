@@ -2,12 +2,12 @@ import AppKit
 
 /// Command-line options. A folder or file to open is the everyday one:
 ///
-///     LeanCode ~/Documents/GitHub/resume
+///     ProcessCode ~/Documents/GitHub/resume
 ///
 /// The rest set up a window and save a picture of it, which is how the app's design is checked
 /// without anyone clicking through it:
 ///
-///     LeanCode <folder> --shell --open README.md --mode split --layout split \
+///     ProcessCode <folder> --shell --open README.md --mode split --layout split \
 ///         --appearance dark --snapshot /tmp/shot.png --delay 3
 struct LaunchOptions {
     var folders: [URL] = []

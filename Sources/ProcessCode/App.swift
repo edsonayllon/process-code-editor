@@ -269,16 +269,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return item
         }
 
-        menu("Lean Code") { m in
-            add(m, "About Lean Code", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        menu("Process Code") { m in
+            add(m, "About Process Code", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
             m.addItem(.separator())
             add(m, "Settings…", #selector(showSettings(_:)), ",")
             m.addItem(.separator())
-            add(m, "Hide Lean Code", #selector(NSApplication.hide(_:)), "h")
+            add(m, "Hide Process Code", #selector(NSApplication.hide(_:)), "h")
             add(m, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option])
             add(m, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
             m.addItem(.separator())
-            add(m, "Quit Lean Code", #selector(NSApplication.terminate(_:)), "q")
+            add(m, "Quit Process Code", #selector(NSApplication.terminate(_:)), "q")
         }
         menu("File") { m in
             add(m, "New Window", #selector(newWindow(_:)), "n", [.command, .shift])
