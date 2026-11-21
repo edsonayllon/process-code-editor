@@ -145,23 +145,55 @@ if [ "$MODE" = "--release" ]; then
 fi
 
 if [ -n "$MODE" ]; then
-  # Run from Process Code's own terminal, quitting the app hangs up this script and closes its output.
-  # Ignore the hangup and let the messages fail, so the install still finishes.
+  # Run from Process Code's own terminal, quitting the app takes this script down with it: the app
+  # ends its terminals, and a shell or agent that is ending kills what it started. So the quit, the
+  # copy and the reopen run in a process of their own, in a new session and no longer a child of
+  # this one, with every signal that can be ignored ignored. What it says goes to a log, which is
+  # shown here if this script is still around to show it.
+  LOG="$PWD/build/install.log"
+  DONE="$PWD/build/install.status"
+  rm -f "$DONE"
+  APP_NAME="$APP_NAME" APP="$PWD/$APP" MODE="$MODE" DONE="$DONE" \
+    perl -MPOSIX -e 'exit if fork; setsid(); $SIG{$_} = "IGNORE" for qw(HUP TERM INT PIPE); exec @ARGV' \
+    /bin/bash -c '
+      finish() { echo "$1" > "$DONE"; exit "$1"; }
+      osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
+      # Quitting can be cancelled from the app'"'"'s "still running" prompt, so wait for it to go.
+      for _ in $(seq 100); do
+        pgrep -x ProcessCode >/dev/null || break
+        sleep 0.1
+      done
+      if pgrep -x ProcessCode >/dev/null; then
+        echo "$APP_NAME is still running, so it was not replaced. Quit it and run this again."
+        finish 1
+      fi
+      rm -rf "/Applications/$APP_NAME.app"
+      cp -R "$APP" "/Applications/$APP_NAME.app" || finish 1
+      echo "Installed /Applications/$APP_NAME.app"
+      if [ "$MODE" = "--update" ]; then
+        # Just after a quit the system can still count the app as open and do nothing, so ask
+        # until the new copy is running.
+        for _ in 1 2 3 4 5; do
+          open "/Applications/$APP_NAME.app" || true
+          for _ in $(seq 20); do
+            pgrep -x ProcessCode >/dev/null && finish 0
+            sleep 0.1
+          done
+        done
+        echo "Installed, but $APP_NAME did not open."
+        finish 1
+      fi
+      finish 0
+    ' </dev/null >"$LOG" 2>&1
+
+  # At most about 25 seconds: ten for the quit, ten for the reopen, and the copy.
   trap '' HUP
-  osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
-  # Quitting can be cancelled from the app's "still running" prompt, so wait for it to go.
-  for _ in $(seq 100); do
-    pgrep -x ProcessCode >/dev/null || break
+  for _ in $(seq 250); do
+    [ -f "$DONE" ] && break
     sleep 0.1
   done
-  if pgrep -x ProcessCode >/dev/null; then
-    echo "$APP_NAME is still running, so it was not replaced. Quit it and run this again." >&2
-    exit 1
-  fi
-  rm -rf "/Applications/$APP_NAME.app"
-  cp -R "$APP" "/Applications/$APP_NAME.app"
-  echo "Installed /Applications/$APP_NAME.app" 2>/dev/null || true
-  if [ "$MODE" = "--update" ]; then
-    open "/Applications/$APP_NAME.app"
-  fi
+  cat "$LOG" 2>/dev/null || true
+  [ -f "$DONE" ] && exit "$(cat "$DONE")"
+  echo "The install did not finish; see $LOG" >&2
+  exit 1
 fi
