@@ -34,6 +34,13 @@ Settings are deliberately few: light, dark or the system's, the code font and it
 - `git` for the status colours, and the GitHub CLI to clone from your account (`brew install gh`, then
   `gh auth login` once). For LaTeX, a TeX distribution with `latexmk` (MacTeX, or `brew install basictex`).
 
+## Download
+
+The notarised app is attached to every [release](https://github.com/edsonayllon/process-code-editor/releases);
+the newest is always at
+<https://github.com/edsonayllon/process-code-editor/releases/latest/download/ProcessCode.dmg>. Open the DMG and
+drag Process Code to Applications. The app doesn't update itself, so come back for new versions.
+
 ## Build and install
 
 ```sh
@@ -54,7 +61,19 @@ open -a "Process Code" ~/Documents/GitHub/my-project
 
 ## Release
 
-`./scripts/build-app.sh --release` builds the app, signs it with a Developer ID Application certificate,
+```sh
+./scripts/release.sh --dry-run   # the version and notes the commits since the last tag would give
+./scripts/release.sh             # test, build, notarise, tag vX.Y.Z and publish the DMG on GitHub
+```
+
+Releases are cut on this Mac from `main` with [semantic-release](https://semantic-release.gitbook.io), not in
+GitHub Actions, because signing and notarising need the Mac's keychain. The commit messages since the last tag
+decide the version: a `fix:` makes a patch, a `feat:` a minor and a breaking change a major; with only `docs:`,
+`chore:` and the like there is nothing to release. It needs Node 24.10 or later and a logged-in GitHub CLI.
+`main` has to be clean and pushed. The website's download button points at the latest release, so it needs no
+change afterwards.
+
+The build step is `./scripts/build-app.sh --release`, which builds the app, signs it with a Developer ID Application certificate,
 packs it into `build/ProcessCode.dmg`, has Apple notarise it, staples the ticket and checks the result the way
 Gatekeeper will. It needs two things once per Mac:
 

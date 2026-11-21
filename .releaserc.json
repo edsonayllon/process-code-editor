@@ -1,0 +1,17 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    ["@semantic-release/exec", {
+      "prepareCmd": "VERSION=${nextRelease.version} ./scripts/build-app.sh --release"
+    }],
+    ["@semantic-release/github", {
+      "assets": [{ "path": "build/ProcessCode.dmg" }],
+      "successComment": false,
+      "failComment": false,
+      "releasedLabels": false
+    }]
+  ]
+}

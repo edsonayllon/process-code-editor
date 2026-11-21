@@ -30,7 +30,9 @@ fi
 
 APP_NAME="Process Code"
 BUNDLE_ID="com.processcode.app"
-VERSION="1.0.0"
+# The version is the one being released (scripts/release.sh passes it), or else the last release's tag.
+VERSION="${VERSION:-$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')}"
+VERSION="${VERSION:-1.0.0}"
 APP="build/$APP_NAME.app"
 
 swift build -c release
