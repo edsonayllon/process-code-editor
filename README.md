@@ -49,6 +49,23 @@ or from a shell:
 open -a "Process Code" ~/Documents/GitHub/resume
 ```
 
+## Release
+
+`./scripts/build-app.sh --release` builds the app, signs it with a Developer ID Application certificate,
+packs it into `build/ProcessCode.dmg`, has Apple notarise it, staples the ticket and checks the result the way
+Gatekeeper will. It needs two things once per Mac:
+
+1. A **Developer ID Application** certificate in the keychain: Xcode → Settings → Accounts → your team →
+   Manage Certificates → + → Developer ID Application.
+2. A notarytool profile named `notary`, using an app-specific password from account.apple.com:
+
+   ```sh
+   xcrun notarytool store-credentials notary --apple-id <your Apple ID> --team-id <your Team ID>
+   ```
+
+Every build runs under the hardened runtime with `Resources/ProcessCode.entitlements`, so a local build
+behaves like the release. Notarisation takes a few minutes and gives up after 20.
+
 ## Shortcuts
 
 | Action                                   | Keys      |

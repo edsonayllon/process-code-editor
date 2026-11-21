@@ -1,14 +1,32 @@
 #!/bin/bash
 # Builds "Process Code.app" into build/. Pass --install to also copy it to /Applications, or --update to
-# install it and open the new copy.
+# install it and open the new copy. Pass --release to sign it for distribution and make a notarised
+# build/ProcessCode.dmg (needs a Developer ID Application certificate and a notarytool profile, see README).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODE="${1:-}"
 case "$MODE" in
-  "" | --install | --update) ;;
-  *) echo "usage: $0 [--install | --update]" >&2; exit 2 ;;
+  "" | --install | --update | --release) ;;
+  *) echo "usage: $0 [--install | --update | --release]" >&2; exit 2 ;;
 esac
+
+# The keychain profile saved with `xcrun notarytool store-credentials`.
+NOTARY_PROFILE="${NOTARY_PROFILE:-notary}"
+if [ "$MODE" = "--release" ]; then
+  IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+  if [ -z "$IDENTITY" ]; then
+    echo "No Developer ID Application certificate in the keychain. Create one first (see README)." >&2
+    exit 1
+  fi
+  if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    echo "No notarytool profile named \"$NOTARY_PROFILE\". Save one first (see README)." >&2
+    exit 1
+  fi
+else
+  # A stable signing identity keeps macOS from asking for folder access again after every rebuild.
+  IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')"
+fi
 
 APP_NAME="Process Code"
 BUNDLE_ID="com.processcode.app"
@@ -36,6 +54,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ProcessCode"
 strip -x "$APP/Contents/MacOS/ProcessCode"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# The licences of the libraries linked into the app travel with every copy of it.
+mkdir "$APP/Contents/Resources/Licenses"
+cp .build/checkouts/SwiftTerm/LICENSE "$APP/Contents/Resources/Licenses/SwiftTerm.txt"
+cp .build/checkouts/swift-cmark/COPYING "$APP/Contents/Resources/Licenses/cmark-gfm.txt"
 
 # The usage descriptions cover the app and everything run in its terminal: macOS asks on the
 # app's behalf when a command there first reaches into a protected folder or another app.
@@ -83,10 +105,44 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# A stable signing identity keeps macOS from asking for folder access again after every rebuild.
-IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')"
-codesign --force --sign "${IDENTITY:--}" "$APP"
+# Every build runs under the hardened runtime that notarisation requires, so a local build behaves like the
+# one people download. Only a release needs the secure timestamp, which asks Apple's server.
+SIGN_FLAGS=(--force --options runtime --entitlements Resources/ProcessCode.entitlements)
+[ "$MODE" = "--release" ] && SIGN_FLAGS+=(--timestamp)
+codesign "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$APP"
+codesign --verify --strict "$APP"
 echo "Built $APP (signed with: ${IDENTITY:-ad-hoc})"
+
+if [ "$MODE" = "--release" ]; then
+  DMG="build/ProcessCode.dmg"
+  STAGE="$(mktemp -d)"
+  MOUNT="$(mktemp -d)"
+  trap 'hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || true; rm -rf "$STAGE"' EXIT
+  cp -R "$APP" "$STAGE/"
+  ln -s /Applications "$STAGE/Applications"
+  rm -f "$DMG"
+  hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$STAGE" -fs APFS -format UDZO "$DMG"
+  codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+
+  # --timeout keeps a stuck submission from waiting forever; Apple usually answers in a few minutes.
+  echo "Notarising $DMG..."
+  xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait --timeout 20m \
+    > build/notarytool.log 2>&1 || true
+  if ! grep -q "status: Accepted" build/notarytool.log; then
+    cat build/notarytool.log >&2
+    echo "Notarisation failed. For the reasons: xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE" >&2
+    exit 1
+  fi
+  xcrun stapler staple -q "$DMG"
+
+  # Check it the way Gatekeeper will on someone else's Mac: the disk image, then the app inside it.
+  xcrun stapler validate -q "$DMG"
+  spctl -a -t open --context context:primary-signature "$DMG"
+  hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
+  spctl -a -t exec "$MOUNT/$APP_NAME.app"
+  echo "Notarised $DMG ($(du -h "$DMG" | cut -f1 | tr -d ' '))"
+  exit 0
+fi
 
 if [ -n "$MODE" ]; then
   # Run from Process Code's own terminal, quitting the app hangs up this script and closes its output.
