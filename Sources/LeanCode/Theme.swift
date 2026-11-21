@@ -1,0 +1,172 @@
+import AppKit
+import SwiftUI
+
+extension NSColor {
+    /// A colour that follows the app's appearance.
+    convenience init(light: UInt32, dark: UInt32) {
+        self.init(name: nil) { appearance in
+            NSColor(hex: appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light)
+        }
+    }
+
+    convenience init(hex: UInt32) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+                  green: CGFloat((hex >> 8) & 0xff) / 255,
+                  blue: CGFloat(hex & 0xff) / 255,
+                  alpha: 1)
+    }
+
+    /// "#rrggbb", resolved for the given appearance.
+    func hexString(for appearance: NSAppearance) -> String {
+        var result = "#000000"
+        appearance.performAsCurrentDrawingAppearance {
+            guard let c = usingColorSpace(.sRGB) else { return }
+            result = String(format: "#%02x%02x%02x", Int(round(c.redComponent * 255)),
+                            Int(round(c.greenComponent * 255)), Int(round(c.blueComponent * 255)))
+        }
+        return result
+    }
+}
+
+/// One palette, one radius family and one spacing scale (multiples of 4) for the whole app.
+/// The colours are near-black neutrals with a single green accent; the git and syntax colours
+/// are GitHub's, which is what the code is read against everywhere else.
+enum Theme {
+    // Surfaces
+    static let backgroundNS = NSColor(light: 0xffffff, dark: 0x0a0b0a)
+    static let sidebarNS = NSColor(light: 0xf5f6f5, dark: 0x111312)
+    static let borderNS = NSColor(light: 0xdcdfdd, dark: 0x232625)
+    static let currentLineNS = NSColor(light: 0xf3f5f4, dark: 0x131514)
+    static let selectionNS = NSColor(light: 0xc8e1ff, dark: 0x1f3a5c)
+
+    // Text
+    static let textNS = NSColor(light: 0x1f2328, dark: 0xe6e8e7)
+    static let secondaryNS = NSColor(light: 0x59636e, dark: 0x9a9f9c)
+    static let tertiaryNS = NSColor(light: 0x8a929b, dark: 0x666b68)
+
+    // Accent and git states
+    static let accentNS = NSColor(light: 0x1a7f37, dark: 0x3fb950)
+    static let modifiedNS = NSColor(light: 0x9a6700, dark: 0xd29922)
+    static let deletedNS = NSColor(light: 0xcf222e, dark: 0xf85149)
+
+    static let background = Color(nsColor: backgroundNS)
+    static let sidebar = Color(nsColor: sidebarNS)
+    static let border = Color(nsColor: borderNS)
+    static let text = Color(nsColor: textNS)
+    static let secondary = Color(nsColor: secondaryNS)
+    static let tertiary = Color(nsColor: tertiaryNS)
+    static let accent = Color(nsColor: accentNS)
+    static let modified = Color(nsColor: modifiedNS)
+    static let deleted = Color(nsColor: deletedNS)
+
+    static let radius: CGFloat = 8
+    static let smallRadius: CGFloat = 6
+    /// The height of the bar at the top of the sidebar and of the content, and of the terminal's bar.
+    static let barHeight: CGFloat = 52
+    static let rowHeight: CGFloat = 28
+
+    // Syntax colours (GitHub light and dark).
+    static func syntaxColor(_ token: Token) -> NSColor {
+        switch token {
+        case .plain: return textNS
+        case .comment: return syntaxComment
+        case .string: return syntaxString
+        case .number, .constant: return syntaxConstant
+        case .keyword: return syntaxKeyword
+        case .type: return syntaxType
+        case .function: return syntaxFunction
+        case .tag: return syntaxTag
+        case .attribute: return syntaxConstant
+        case .heading: return syntaxConstant
+        case .emphasis: return syntaxType
+        case .link: return syntaxString
+        }
+    }
+
+    static let syntaxComment = NSColor(light: 0x59636e, dark: 0x8b949e)
+    static let syntaxString = NSColor(light: 0x0a3069, dark: 0xa5d6ff)
+    static let syntaxConstant = NSColor(light: 0x0550ae, dark: 0x79c0ff)
+    static let syntaxKeyword = NSColor(light: 0xcf222e, dark: 0xff7b72)
+    static let syntaxType = NSColor(light: 0x953800, dark: 0xffa657)
+    static let syntaxFunction = NSColor(light: 0x8250df, dark: 0xd2a8ff)
+    static let syntaxTag = NSColor(light: 0x116329, dark: 0x7ee787)
+
+    /// The sixteen ANSI colours for the terminal, normal then bright.
+    static func ansiColors(dark: Bool) -> [UInt32] {
+        dark
+            ? [0x484f58, 0xff7b72, 0x3fb950, 0xd29922, 0x58a6ff, 0xbc8cff, 0x39c5cf, 0xb1bac4,
+               0x6e7681, 0xffa198, 0x56d364, 0xe3b341, 0x79c0ff, 0xd2a8ff, 0x56d4dd, 0xffffff]
+            : [0x24292f, 0xcf222e, 0x116329, 0x7d4e00, 0x0969da, 0x8250df, 0x1b7c83, 0x6e7781,
+               0x57606a, 0xa40e26, 0x1a7f37, 0x633c01, 0x218bff, 0xa475f9, 0x3192aa, 0x8c959f]
+    }
+}
+
+extension GitState {
+    var color: Color {
+        switch self {
+        case .modified, .renamed: return Theme.modified
+        case .added, .untracked: return Theme.accent
+        case .deleted, .conflicted: return Theme.deleted
+        case .ignored: return Theme.tertiary
+        }
+    }
+}
+
+// MARK: Controls
+
+/// A borderless icon button that shows a soft plate on hover, as in the bars.
+struct IconButtonStyle: ButtonStyle {
+    var active = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration, active: active)
+    }
+
+    struct Styled: View {
+        let configuration: Configuration
+        let active: Bool
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(active || hovering ? Theme.text : Theme.secondary)
+                .frame(width: 28, height: 28)
+                .background(Color.primary.opacity(configuration.isPressed ? 0.14 : (active ? 0.1 : (hovering ? 0.07 : 0))),
+                            in: RoundedRectangle(cornerRadius: Theme.smallRadius))
+                .contentShape(Rectangle())
+                .opacity(enabled ? 1 : 0.4)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// A draggable hairline between two panes.
+struct Divider1: View {
+    enum Axis { case horizontal, vertical }
+    /// `.vertical` is a vertical line (between side-by-side panes).
+    let axis: Axis
+    var onDrag: ((CGFloat) -> Void)?
+    var onEnd: (() -> Void)?
+
+    var body: some View {
+        let line = Rectangle().fill(Theme.border)
+        Group {
+            if axis == .vertical { line.frame(width: 1) } else { line.frame(height: 1) }
+        }
+        .overlay {
+            if let onDrag {
+                Color.clear
+                    .frame(width: axis == .vertical ? 9 : nil, height: axis == .horizontal ? 9 : nil)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { (axis == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
+                    }
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { onDrag(axis == .vertical ? $0.location.x : $0.location.y) }
+                        .onEnded { _ in onEnd?() })
+            }
+        }
+    }
+}
