@@ -62,6 +62,27 @@ final class Workspace: ObservableObject {
     /// The editor is on screen: there's a file open and the terminal isn't covering it.
     var editorShown: Bool { !documents.isEmpty && !(terminalVisible && terminalMaximized) }
 
+    // Focus mode
+
+    /// Focus mode: with the sidebar hidden and the terminal filling the window or the screen,
+    /// the bars fade away and the terminal is all there is, until the pointer goes to them. The
+    /// spotlight setting turns it off.
+    nonisolated static func focusMode(sidebarVisible: Bool, editorShown: Bool, spotlight: Bool = true) -> Bool {
+        spotlight && !sidebarVisible && !editorShown
+    }
+
+    /// The terminal is alone, where the spotlight button does something.
+    var focusModePossible: Bool { Workspace.focusMode(sidebarVisible: sidebarVisible, editorShown: editorShown) }
+    var inFocusMode: Bool { focusModePossible && Settings.shared.spotlight }
+    /// The pointer is on one of the bars (or was a moment ago), which shows them in focus mode.
+    @Published var barsRevealed = false
+    /// The bars are faded out. They keep their places, so the terminal never changes size.
+    var barsHidden: Bool { inFocusMode && !barsRevealed }
+    /// Keeps the bars shown whatever the pointer does, to compare focus mode with them shown.
+    var keepBarsShown = false
+    private let barAreas = NSHashTable<BarHoverView>.weakObjects()
+    private var barCheck: Timer?
+
     init(root: URL, launchAgent: Bool = Settings.shared.startAgentOnOpen) {
         self.root = root.standardizedFileURL
         let saved = Workspace.remembersState ? defaults.dictionary(forKey: stateKey) ?? [:] : [:]
@@ -83,10 +104,40 @@ final class Workspace: ObservableObject {
     }
 
     func close() {
+        barCheck?.invalidate()
         saveState()
         watcher?.stop()
         terminals.forEach { $0.terminate() }
         terminals = []
+    }
+
+    // MARK: Showing the bars in focus mode
+
+    func registerBarArea(_ area: BarHoverView) {
+        barAreas.add(area)
+        if area.containsPointer { pointerEnteredBar() }
+    }
+
+    /// Shows the bars, and from then on looks every moment for the pointer to have left them.
+    /// The look, not the bars' own exit events, is what hides them: an exit can go missing, as
+    /// when the strip goes with the pointer in it. Leaving one bar for the other in between two
+    /// looks doesn't flicker, and the look runs only in the run loop's default mode, so it waits
+    /// while a menu from a bar is open.
+    func pointerEnteredBar() {
+        if !barsRevealed { barsRevealed = true }
+        guard barCheck == nil else { return }
+        let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkBars() }
+        }
+        RunLoop.main.add(timer, forMode: .default)
+        barCheck = timer
+    }
+
+    private func checkBars() {
+        if keepBarsShown || barAreas.allObjects.contains(where: \.containsPointer) { return }
+        barCheck?.invalidate()
+        barCheck = nil
+        barsRevealed = false
     }
 
     // MARK: State kept between launches

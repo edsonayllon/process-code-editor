@@ -9,6 +9,10 @@ used for in that setup, in a 4 MB app that idles around 60 MB of memory instead 
 - **One keystroke for a full-height terminal.** ⌘J, the button at the right of the terminal's bar, or a double
   click on that bar gives the terminal the whole window; the same again brings the editor back. Opening a file
   brings the editor back by itself.
+- **Focus mode.** With the sidebar hidden and the terminal filling the window or the screen, the bars fade away
+  and only the agent's text is left. Move the pointer to the top and they come back; move it away
+  and they fade again. Nothing moves when they do, so the terminal never resizes. The lightbulb at the right of
+  the terminal's bar (Spotlight) turns this off and on; it's on to begin with.
 - **A projects window instead of a welcome page.** A new window lists the git repositories in your projects
   folder (`~/Documents/GitHub` unless you change it), most recently worked on first, each with its branch,
   uncommitted changes and commits waiting to push or pull. Type to filter, Return to open. Clone one of your

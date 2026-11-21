@@ -32,6 +32,7 @@ struct SettingsView: View {
                     LabeledContent("Size", value: "\(Int(settings.fontSize)) pt")
                 }
                 Toggle("Margins beside the terminal in a wide window", isOn: $settings.margins)
+                Toggle("Spotlight: fade the bars away while the terminal is alone", isOn: $settings.spotlight)
                 Text("func greet(name: String) -> String { \"Hello, \\(name)\" }")
                     .font(Font(settings.codeFont))
                     .foregroundStyle(Theme.secondary)

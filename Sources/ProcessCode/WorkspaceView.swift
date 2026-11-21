@@ -20,17 +20,19 @@ struct WorkspaceView: View {
                     // In full screen the top bar is in the window's title bar strip instead.
                     if !workspace.isFullScreen {
                         TopBar(workspace: workspace)
-                        Divider1(axis: .horizontal)
+                        Divider1(axis: .horizontal).fadesInFocusMode(workspace)
                     }
                     panes
                 }
             }
         }
-        .overlay(alignment: .top) { if workspace.isFullScreen { Divider1(axis: .horizontal) } }
+        .overlay(alignment: .top) { if workspace.isFullScreen { Divider1(axis: .horizontal).fadesInFocusMode(workspace) } }
         // The content runs under the title bar, except in full screen, where the title bar is a
         // strip of its own, holding the top bar, and the content starts below it.
         .ignoresSafeArea(edges: workspace.isFullScreen ? [.horizontal, .bottom] : .all)
         .background(Theme.background.ignoresSafeArea())
+        // In a window the system's buttons sit over the top bar, and fade with it.
+        .background(SystemButtonsFade(hidden: workspace.barsHidden && !workspace.isFullScreen))
     }
 
     /// The editor above the terminal, or either one alone.
@@ -136,7 +138,18 @@ struct TopBar: View {
                 Theme.border.frame(width: 1).offset(x: workspace.sidebarWidth)
             }
         }
-        .background { if !inTitleBar { WindowDragArea() } }
+        .fadesInFocusMode(workspace)
+        .background {
+            if inTitleBar {
+                BarHover(workspace: workspace, reachesUp: true)
+            } else {
+                WindowDragArea()
+                BarHover(workspace: workspace)
+            }
+        }
+        // The strip has a grey backdrop of its own; over it the bar is on the content's colour, as
+        // in a window, so in focus mode the screen is one colour to the top.
+        .background { if inTitleBar { Theme.background.allowsHitTesting(false) } }
     }
 }
 
@@ -453,6 +466,14 @@ private struct TerminalPanel: View {
                     .buttonStyle(IconButtonStyle())
                     .help(settings.margins ? "Use the Full Width (⇧⌘M)" : "Show Margins (⇧⌘M)")
                 }
+                // Only with the terminal alone do the bars fade.
+                if workspace.focusModePossible {
+                    Button { settings.spotlight.toggle() } label: {
+                        Image(systemName: settings.spotlight ? "lightbulb.fill" : "lightbulb")
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .help(settings.spotlight ? "Turn Off Spotlight: Keep the Bars Shown" : "Turn On Spotlight: Fade the Bars Away")
+                }
                 if !workspace.documents.isEmpty {
                     let maximized = workspace.terminalMaximized
                     Button { workspace.toggleTerminalMaximized() } label: {
@@ -464,7 +485,9 @@ private struct TerminalPanel: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 40)
+            .fadesInFocusMode(workspace)
             .background(BarDoubleClick { if !workspace.documents.isEmpty { workspace.toggleTerminalMaximized() } })
+            .background(BarHover(workspace: workspace))
 
             if let session = workspace.activeTerminal {
                 ReadableColumn(leading: 12, onMarginClick: session.focus) {
@@ -520,6 +543,92 @@ private struct TerminalTab: View {
 
     var body: some View {
         Tab(title: session.title, selected: selected, select: select, close: close)
+    }
+}
+
+/// Fades the window's close, minimise and zoom buttons with the top bar, in a window. They're
+/// faded rather than hidden, so they stay where they are and still take a click.
+private struct SystemButtonsFade: NSViewRepresentable {
+    let hidden: Bool
+
+    final class FadeView: NSView {
+        var faded = false {
+            didSet { if faded != oldValue { apply(animated: true) } }
+        }
+
+        // The first update comes before the view is in its window; it catches up here.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply(animated: false)
+        }
+
+        private func apply(animated: Bool) {
+            guard let window else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = animated ? 0.25 : 0
+                for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                    window.standardWindowButton(kind)?.animator().alphaValue = faded ? 0 : 1
+                }
+            }
+        }
+    }
+
+    func makeNSView(context: Context) -> FadeView { FadeView() }
+
+    func updateNSView(_ view: FadeView, context: Context) { view.faded = hidden }
+}
+
+/// Tells the workspace when the pointer is on a bar, which shows the bars in focus mode. It sits
+/// behind the bar rather than in it, so the bar can fade out and still be found, and it lets
+/// clicks through.
+struct BarHover: NSViewRepresentable {
+    let workspace: Workspace
+    /// The bar is at the top of the screen, so the menu bar above it counts as on it: the bars
+    /// stay while the menu bar is down.
+    var reachesUp = false
+
+    func makeNSView(context: Context) -> BarHoverView {
+        let view = BarHoverView()
+        view.workspace = workspace
+        view.reachesUp = reachesUp
+        return view
+    }
+
+    func updateNSView(_ view: BarHoverView, context: Context) {}
+}
+
+final class BarHoverView: NSView {
+    weak var workspace: Workspace?
+    var reachesUp = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { workspace?.registerBarArea(self) }
+    }
+
+    override func mouseEntered(with event: NSEvent) { workspace?.pointerEnteredBar() }
+
+    var containsPointer: Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor else { return false }
+        var area = window.convertToScreen(convert(bounds, to: nil))
+        if reachesUp, let screen = window.screen { area.size.height = screen.frame.maxY - area.minY }
+        return area.contains(NSEvent.mouseLocation)
+    }
+}
+
+extension View {
+    /// Fades a bar out in focus mode, in place, so nothing around it moves.
+    func fadesInFocusMode(_ workspace: Workspace) -> some View {
+        opacity(workspace.barsHidden ? 0 : 1)
+            .animation(.easeInOut(duration: 0.25), value: workspace.barsHidden)
     }
 }
 

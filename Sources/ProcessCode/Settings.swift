@@ -35,6 +35,9 @@ final class Settings: ObservableObject {
     /// The terminal's text is kept to a centred column, with margins either side, instead of
     /// running the width of a wide window.
     @Published var margins: Bool { didSet { defaults.set(margins, forKey: "margins") } }
+    /// Spotlight: in full screen, with the terminal alone, the bars fade away until the pointer
+    /// goes to them.
+    @Published var spotlight: Bool { didSet { defaults.set(spotlight, forKey: "spotlight") } }
     @Published var agentID: String { didSet { defaults.set(agentID, forKey: "agentID") } }
     @Published var customAgentCommand: String { didSet { defaults.set(customAgentCommand, forKey: "customAgentCommand") } }
     @Published var startAgentOnOpen: Bool { didSet { defaults.set(startAgentOnOpen, forKey: "startAgentOnOpen") } }
@@ -48,6 +51,7 @@ final class Settings: ObservableObject {
         let size = defaults.double(forKey: "fontSize")
         fontSize = Settings.fontSizes.contains(size) ? size : 13
         margins = defaults.object(forKey: "margins") == nil ? true : defaults.bool(forKey: "margins")
+        spotlight = defaults.object(forKey: "spotlight") as? Bool ?? true
         agentID = defaults.string(forKey: "agentID") ?? "claude"
         customAgentCommand = defaults.string(forKey: "customAgentCommand") ?? ""
         startAgentOnOpen = defaults.object(forKey: "startAgentOnOpen") as? Bool ?? true

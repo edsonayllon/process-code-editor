@@ -232,12 +232,22 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(Settings.sideMargin(available: 600, readable: 862), 0, "a narrow pane is filled")
     }
 
+    func testFocusModeOnlyWithTheTerminalAlone() {
+        XCTAssertTrue(Workspace.focusMode(sidebarVisible: false, editorShown: false))
+        XCTAssertFalse(Workspace.focusMode(sidebarVisible: true, editorShown: false), "not with the sidebar")
+        XCTAssertFalse(Workspace.focusMode(sidebarVisible: false, editorShown: true), "not with a file open above")
+        XCTAssertFalse(Workspace.focusMode(sidebarVisible: false, editorShown: false, spotlight: false), "not with spotlight off")
+    }
+
     func testMarginsSetting() {
         let defaults = UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!
         let settings = Settings(defaults: defaults)
         XCTAssertTrue(settings.margins, "margins are on until turned off")
         settings.margins = false
         XCTAssertFalse(Settings(defaults: defaults).margins)
+        XCTAssertTrue(settings.spotlight, "spotlight is on until turned off")
+        settings.spotlight = false
+        XCTAssertFalse(Settings(defaults: defaults).spotlight)
         settings.fontSize = 13
         let width = settings.readableWidth
         settings.fontSize = 16

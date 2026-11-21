@@ -40,6 +40,8 @@ struct LaunchOptions {
     /// With `--fullscreen`: leaves full screen again before the picture, which checks that the
     /// window's own top bar comes back.
     var exitFullScreen = false
+    /// Shows the bars as if the pointer were on them, to compare focus mode with them shown.
+    var revealBars = false
 
     init() {}
 
@@ -70,6 +72,7 @@ struct LaunchOptions {
             case "--shift-return": shiftReturn = true
             case "--fullscreen": fullScreen = true
             case "--exit-fullscreen": fullScreen = true; exitFullScreen = true
+            case "--reveal-bars": revealBars = true
             case "--hit":
                 let parts = (value() ?? "").split(separator: ",").compactMap { Double($0) }
                 if parts.count == 2 { hit = NSPoint(x: parts[0], y: parts[1]) }
@@ -121,6 +124,7 @@ struct LaunchOptions {
         if sidebar == "changes" { workspace.sidebarMode = .changes }
         if sidebar == "hidden" { workspace.sidebarVisible = false }
         if let filter { workspace.filter = filter }
+        if revealBars { workspace.keepBarsShown = true; workspace.pointerEnteredBar() }
         if fullScreen {
             NSApp.activate(ignoringOtherApps: true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { window.toggleFullScreen(nil) }
@@ -128,7 +132,8 @@ struct LaunchOptions {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) { window.toggleFullScreen(nil) }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + max(delay - 0.5, 1)) {
-                print("fullscreen:", window.styleMask.contains(.fullScreen), "toolbar visible:", window.toolbar?.isVisible ?? false)
+                print("fullscreen:", window.styleMask.contains(.fullScreen), "toolbar visible:", window.toolbar?.isVisible ?? false,
+                      "focus mode:", workspace.inFocusMode, "bars hidden:", workspace.barsHidden)
                 for w in NSApp.windows where w.isVisible {
                     // The title bar's own window should sit across the top of the screen.
                     print("window:", String(describing: Swift.type(of: w)), w.frame, "alpha:", w.alphaValue)
@@ -213,7 +218,10 @@ struct LaunchOptions {
             let url = URL(fileURLWithPath: snapshot)
             // Whichever window is in front by now.
             let window = window ?? NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible }
-            if let window {
+            if let window, window.styleMask.contains(.fullScreen) {
+                // The whole screen, which takes in the title bar strip, a window of its own.
+                Shell.run("/usr/sbin/screencapture", ["-x", "-m", snapshot])
+            } else if let window {
                 Shell.run("/usr/sbin/screencapture", ["-x", "-o", "-l", String(window.windowNumber), snapshot])
             }
             if !FileManager.default.fileExists(atPath: snapshot),
