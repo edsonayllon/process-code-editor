@@ -37,16 +37,19 @@ Settings are deliberately few: light, dark or the system's, the code font and it
 ## Build and install
 
 ```sh
+git clone https://github.com/edsonayllon/process-code-editor.git
+cd process-code-editor
 ./scripts/build-app.sh --install   # builds and copies Process Code.app to /Applications
 ./scripts/build-app.sh --update    # the same, then opens the new copy
 swift test                         # runs the tests
 ```
 
-Without a flag the app is left in `build/`. Open a folder from the app (⌘O), by dropping it on the Dock icon,
-or from a shell:
+Without a flag the app is left in `build/`. The script signs it with your Apple Development certificate if you
+have one, and ad hoc otherwise; with an ad hoc signature macOS asks for folder access again
+after each rebuild. Open a folder from the app (⌘O), by dropping it on the Dock icon, or from a shell:
 
 ```sh
-open -a "Process Code" ~/Documents/GitHub/resume
+open -a "Process Code" ~/Documents/GitHub/my-project
 ```
 
 ## Release
@@ -118,3 +121,8 @@ The window can photograph itself, which is how its design is checked:
 "build/Process Code.app/Contents/MacOS/ProcessCode" . --shell --open README.md --mode split --layout split \
     --appearance dark --snapshot /tmp/shot.png
 ```
+
+## License
+
+[MIT](LICENSE). The app links SwiftTerm (MIT) and cmark-gfm (BSD 2-Clause); anyone who distributes a built copy
+must include those projects' licence notices with it.
