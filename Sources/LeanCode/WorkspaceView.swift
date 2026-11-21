@@ -62,7 +62,7 @@ private struct TopBar: View {
         HStack(spacing: 8) {
             if !workspace.sidebarVisible {
                 // Room for the window's buttons, which the sidebar otherwise holds.
-                Color.clear.frame(width: 64)
+                if !workspace.isFullScreen { Color.clear.frame(width: 64) }
                 Button { workspace.sidebarVisible = true } label: { Image(systemName: "sidebar.left") }
                     .buttonStyle(IconButtonStyle())
                     .help("Show Sidebar (⌘B)")

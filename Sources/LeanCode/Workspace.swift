@@ -28,6 +28,9 @@ final class Workspace: ObservableObject {
     @Published var sidebarMode = SidebarMode.files
     @Published var sidebarVisible = true
     @Published var sidebarWidth: CGFloat = 256
+    /// In full screen the window's buttons are hidden until the pointer reaches the top of the
+    /// screen, and then they come down over the content, so the bars leave no room for them.
+    @Published var isFullScreen = false
     @Published var selectedPath: String?
     @Published var filter = "" { didSet { updateFilter() } }
     @Published var filterResults: [String] = []

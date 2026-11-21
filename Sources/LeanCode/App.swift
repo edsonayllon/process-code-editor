@@ -66,6 +66,27 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmClose() }
 
+    // In full screen a toolbar stays on screen as a band of its own over the top of the content,
+    // which hid the app's bars. This one is empty and only sizes the title bar, so it goes while
+    // the window is full screen, and the title bar then slides down over the content on demand.
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        window?.toolbar?.isVisible = false
+        workspace.isFullScreen = true
+    }
+
+    func windowWillExitFullScreen(_ notification: Notification) {
+        workspace.isFullScreen = false
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        window?.toolbar?.isVisible = true
+    }
+
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) {
+        window.toolbar?.isVisible = true
+        workspace.isFullScreen = false
+    }
+
     func windowWillClose(_ notification: Notification) {
         workspace.close()
         onClose?(self)

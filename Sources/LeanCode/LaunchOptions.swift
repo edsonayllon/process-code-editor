@@ -35,6 +35,8 @@ struct LaunchOptions {
     var switchTo: Appearance?
     var shiftReturn = false
     var hit: NSPoint?
+    /// Starts the window in full screen and prints which windows the app has on screen then.
+    var fullScreen = false
 
     init() {}
 
@@ -63,6 +65,7 @@ struct LaunchOptions {
             case "--return": pressReturn = true
             case "--switch-to": switchTo = value().flatMap(Appearance.init(rawValue:))
             case "--shift-return": shiftReturn = true
+            case "--fullscreen": fullScreen = true
             case "--hit":
                 let parts = (value() ?? "").split(separator: ",").compactMap { Double($0) }
                 if parts.count == 2 { hit = NSPoint(x: parts[0], y: parts[1]) }
@@ -114,6 +117,17 @@ struct LaunchOptions {
         if sidebar == "changes" { workspace.sidebarMode = .changes }
         if sidebar == "hidden" { workspace.sidebarVisible = false }
         if let filter { workspace.filter = filter }
+        if fullScreen {
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { window.toggleFullScreen(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(delay - 0.5, 1)) {
+                print("fullscreen:", window.styleMask.contains(.fullScreen), "toolbar visible:", window.toolbar?.isVisible ?? false)
+                for w in NSApp.windows where w.isVisible {
+                    // The title bar's own window should stay clear (alpha 0) until it's called down.
+                    print("window:", String(describing: Swift.type(of: w)), w.frame, "alpha:", w.alphaValue)
+                }
+            }
+        }
         if let type {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 workspace.activeTerminal?.view.send(txt: type.replacingOccurrences(of: "\\n", with: "\r"))
