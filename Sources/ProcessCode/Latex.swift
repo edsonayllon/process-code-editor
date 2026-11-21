@@ -78,7 +78,7 @@ enum Latex {
     }
 
     /// The PDF that belongs to a LaTeX file: `name.pdf` beside it, else one whose name contains
-    /// the file's (resume.tex → edson-resume.pdf), else the newest PDF in the folder.
+    /// the file's (resume.tex → jane-resume.pdf), else the newest PDF in the folder.
     static func existingPDF(for tex: URL, modifiedAfter date: Date? = nil) -> URL? {
         let directory = tex.deletingLastPathComponent()
         let name = tex.deletingPathExtension().lastPathComponent.lowercased()

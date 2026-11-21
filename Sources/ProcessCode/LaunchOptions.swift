@@ -2,7 +2,7 @@ import AppKit
 
 /// Command-line options. A folder or file to open is the everyday one:
 ///
-///     ProcessCode ~/Documents/GitHub/resume
+///     ProcessCode ~/Documents/GitHub/my-project
 ///
 /// The rest set up a window and save a picture of it, which is how the app's design is checked
 /// without anyone clicking through it:

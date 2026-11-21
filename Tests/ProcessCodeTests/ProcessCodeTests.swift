@@ -178,8 +178,8 @@ final class LatexTests: XCTestCase {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        for name in ["cover-letter.pdf", "edson-resume.pdf"] { try Data("x".utf8).write(to: folder.appendingPathComponent(name)) }
-        XCTAssertEqual(Latex.existingPDF(for: folder.appendingPathComponent("resume.tex"))?.lastPathComponent, "edson-resume.pdf")
+        for name in ["cover-letter.pdf", "jane-resume.pdf"] { try Data("x".utf8).write(to: folder.appendingPathComponent(name)) }
+        XCTAssertEqual(Latex.existingPDF(for: folder.appendingPathComponent("resume.tex"))?.lastPathComponent, "jane-resume.pdf")
         XCTAssertEqual(Latex.existingPDF(for: folder.appendingPathComponent("cover-letter.tex"))?.lastPathComponent, "cover-letter.pdf")
     }
 
