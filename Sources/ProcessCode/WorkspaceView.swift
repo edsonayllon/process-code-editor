@@ -92,15 +92,24 @@ struct TopBar: View {
                     .buttonStyle(IconButtonStyle(glass: true))
                     .help("Show Sidebar (⌘B)")
             }
+            // The folder's name stays at the start of the bar, ahead of any open files, so it's
+            // always clear which folder the window is.
+            Text(workspace.name)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                // As wide as the name, up to a limit past which it's cut short in the middle.
+                .frame(maxWidth: 220, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.leading, 8)
+                .allowsHitTesting(false)
             if workspace.documents.isEmpty {
-                Text(workspace.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                    .padding(.leading, 8)
-                    .allowsHitTesting(false)
                 Spacer(minLength: 8)
             } else {
+                Rectangle().fill(Theme.border).frame(width: 1, height: 16)
+                    .padding(.horizontal, 2)
+                    .allowsHitTesting(false)
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 2) {
