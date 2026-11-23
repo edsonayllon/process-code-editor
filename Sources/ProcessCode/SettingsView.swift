@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The whole of Settings: light or dark, the code font, and which agent starts.
+/// The whole of Settings: light or dark, the code font, which agent starts, and the check for a new version.
 struct SettingsView: View {
     @ObservedObject private var settings = Settings.shared
     @ObservedObject private var projects = ProjectStore.shared
+    @ObservedObject private var updater = AppUpdater.shared
 
     private func chooseProjectsFolder() {
         let panel = NSOpenPanel()
@@ -74,6 +75,21 @@ struct SettingsView: View {
                 Text("Coding Agent")
             } footer: {
                 Text("The agent runs in a terminal tab in the folder you opened. When it exits, the tab stays open as a shell.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Section {
+                LabeledContent(AppUpdater.version.map { "Version \($0)" } ?? "Development build") {
+                    Button("Check for Updates…") { updater.check() }
+                        .disabled(!updater.canCheck)
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text(AppUpdater.hasFeed
+                     ? "Process Code also checks each time it opens, and asks before it installs anything."
+                     : "This copy was built from source, so it doesn't update itself. Rebuild it to get a new version.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -30,7 +30,8 @@ used for in that setup, in a 4 MB app that idles around 60 MB of memory instead 
   second where it is. With a video in each, one button in the top bar plays both from the same moment and another
   takes both back to the start, and a video that's rendered again is shown again at the same place.
 
-Settings are deliberately few: light, dark or the system's, the code font and its size, and which agent starts.
+Settings are deliberately few: light, dark or the system's, the code font and its size, which agent starts, and
+a button that checks for a new version.
 
 ## Requirements
 
@@ -43,7 +44,13 @@ Settings are deliberately few: light, dark or the system's, the code font and it
 The notarised app is attached to every [release](https://github.com/edsonayllon/process-code-editor/releases);
 the newest is always at
 <https://github.com/edsonayllon/process-code-editor/releases/latest/download/ProcessCode.dmg>. Open the DMG and
-drag Process Code to Applications. The app doesn't update itself, so come back for new versions.
+drag Process Code to Applications.
+
+The app looks for a new version each time it opens, and when you choose Check for Updates… in Settings or the
+Process Code menu. When there is one it asks first, then downloads it, checks its signature, replaces itself and
+opens again, so finish what's running in its terminals before you agree. Versions 1.0.0 and 1.1.0 came before
+this and don't update themselves: download the newest once by hand. A copy built from source doesn't update
+itself either.
 
 ## Build and install
 
@@ -67,7 +74,7 @@ open -a "Process Code" ~/Documents/GitHub/my-project
 
 ```sh
 ./scripts/release.sh --dry-run   # the version and notes the commits since the last tag would give
-./scripts/release.sh             # test, build, notarise, tag vX.Y.Z and publish the DMG on GitHub
+./scripts/release.sh             # test, build, notarise, tag vX.Y.Z and publish the DMG and its feed on GitHub
 ```
 
 Releases are cut on this Mac from `main` with [semantic-release](https://semantic-release.gitbook.io), not in
@@ -79,7 +86,10 @@ change afterwards.
 
 The build step is `./scripts/build-app.sh --release`, which builds the app, signs it with a Developer ID Application certificate,
 packs it into `build/ProcessCode.dmg`, has Apple notarise it, staples the ticket and checks the result the way
-Gatekeeper will. It needs two things once per Mac:
+Gatekeeper will. It then signs the disk image for [Sparkle](https://sparkle-project.org), the updater inside the
+app, and writes `build/appcast.xml`, the feed that names this version, its download and that signature. Both
+files are attached to the release, and installed copies read the feed at
+`releases/latest/download/appcast.xml`. It needs three things once per Mac:
 
 1. A **Developer ID Application** certificate in the keychain: Xcode → Settings → Accounts → your team →
    Manage Certificates → + → Developer ID Application.
@@ -88,6 +98,19 @@ Gatekeeper will. It needs two things once per Mac:
    ```sh
    xcrun notarytool store-credentials notary --apple-id <your Apple ID> --team-id <your Team ID>
    ```
+3. The Sparkle key. Make it once, ever:
+
+   ```sh
+   swift package resolve
+   .build/artifacts/sparkle/Sparkle/bin/generate_keys
+   ```
+
+   The private half goes into the login keychain; the public half is printed, and goes into
+   `SPARKLE_PUBLIC_KEY` at the top of `scripts/build-app.sh`, which is committed. Every released app accepts
+   only updates signed with this key, so **keep a copy of the private key somewhere safe**
+   (`generate_keys -x sparkle-private-key` writes it to a file, `generate_keys -f sparkle-private-key` reads
+   it into another Mac's keychain). If it's lost, no installed copy can be updated again. A release stops
+   before it builds anything if the key in the keychain isn't the one in the script.
 
 Every build runs under the hardened runtime with `Resources/ProcessCode.entitlements`, so a local build
 behaves like the release. Notarisation takes a few minutes and gives up after 20.

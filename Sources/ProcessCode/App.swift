@@ -214,6 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         if controllers.isEmpty { showWelcome() }
         NSApp.activate(ignoringOtherApps: true)
+        // Not for a picture: a window offering an update would be in it.
+        if launchOptions.snapshot == nil { AppUpdater.shared.start() }
         launchOptions.run(with: controllers.first)
     }
 
@@ -327,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         menu("Process Code") { m in
             add(m, "About Process Code", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+            add(m, "Check for Updates…", #selector(checkForUpdates(_:)))
             m.addItem(.separator())
             add(m, "Settings…", #selector(showSettings(_:)), ",")
             m.addItem(.separator())
@@ -420,6 +423,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(startAgent(_:)):
             item.title = "Start \(Settings.shared.agent?.name ?? "Agent")"
             return workspace != nil
+        case #selector(checkForUpdates(_:)):
+            return AppUpdater.shared.canCheck
         case #selector(save(_:)):
             return workspace?.focusedDocument?.kind == .text
         case #selector(closeTab(_:)):
@@ -454,6 +459,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
+
+    @objc func checkForUpdates(_ sender: Any?) { AppUpdater.shared.check() }
 
     @objc func openFolder(_ sender: Any?) {
         let panel = NSOpenPanel()

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Builds "Process Code.app" into build/. Pass --install to also copy it to /Applications, or --update to
 # install it and open the new copy. Pass --release to sign it for distribution and make a notarised
-# build/ProcessCode.dmg (needs a Developer ID Application certificate and a notarytool profile, see README).
+# build/ProcessCode.dmg, with the build/appcast.xml that tells installed copies about it (needs a Developer ID
+# Application certificate, a notarytool profile and the Sparkle key, see README).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -10,6 +11,15 @@ case "$MODE" in
   "" | --install | --update | --release) ;;
   *) echo "usage: $0 [--install | --update | --release]" >&2; exit 2 ;;
 esac
+
+# Sparkle's public key. Every released app carries it and accepts only updates signed with the private key
+# that goes with it, which lives in the login keychain of the Mac that cuts releases (see README). It must
+# never change: an installed copy can't take an update signed with another key.
+SPARKLE_PUBLIC_KEY="NecvWgLDDagpygY3Fzyhd6aiBJqC/Ri+u6Z5iHtL0nQ="
+# Where installed copies look for a new version, and where they download it from.
+RELEASES="https://github.com/edsonayllon/process-code-editor/releases"
+# The Sparkle that SwiftPM fetched: the framework that goes into the app, and the tools that sign an update.
+SPARKLE=".build/artifacts/sparkle/Sparkle"
 
 # The keychain profile saved with `xcrun notarytool store-credentials`.
 NOTARY_PROFILE="${NOTARY_PROFILE:-notary}"
@@ -21,6 +31,17 @@ if [ "$MODE" = "--release" ]; then
   fi
   if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
     echo "No notarytool profile named \"$NOTARY_PROFILE\". Save one first (see README)." >&2
+    exit 1
+  fi
+  # Before the minutes of building and notarising: the key this Mac signs with must be the one in the app.
+  swift package resolve
+  if [ -z "$SPARKLE_PUBLIC_KEY" ]; then
+    echo "SPARKLE_PUBLIC_KEY in $0 is empty. Make the key and paste its public half there (see README)." >&2
+    exit 1
+  fi
+  if [ "$("$SPARKLE/bin/generate_keys" -p 2>/dev/null)" != "$SPARKLE_PUBLIC_KEY" ]; then
+    echo "The Sparkle key in this Mac's keychain isn't the one in SPARKLE_PUBLIC_KEY, so installed copies" >&2
+    echo "would refuse this release. Import the right private key first (see README)." >&2
     exit 1
   fi
 else
@@ -55,11 +76,27 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ProcessCode"
 strip -x "$APP/Contents/MacOS/ProcessCode"
+# Sparkle is a framework inside the app, so the binary is told to look for it there and no longer in the
+# build folder, whose path SwiftPM wrote into it.
+mkdir "$APP/Contents/Frameworks"
+cp -R "$SPARKLE/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$APP/Contents/Frameworks/"
+otool -l "$APP/Contents/MacOS/ProcessCode" | sed -n 's|^ *path \(/.*\) (offset [0-9]*)$|\1|p' | while IFS= read -r rpath; do
+  install_name_tool -delete_rpath "$rpath" "$APP/Contents/MacOS/ProcessCode"
+done
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/ProcessCode"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # The licences of the libraries linked into the app travel with every copy of it.
 mkdir "$APP/Contents/Resources/Licenses"
 cp .build/checkouts/SwiftTerm/LICENSE "$APP/Contents/Resources/Licenses/SwiftTerm.txt"
 cp .build/checkouts/swift-cmark/COPYING "$APP/Contents/Resources/Licenses/cmark-gfm.txt"
+cp "$SPARKLE/LICENSE" "$APP/Contents/Resources/Licenses/Sparkle.txt"
+
+# Only a release looks for updates: a copy built here would be replaced by the last release, which is older.
+UPDATE_KEYS=""
+if [ "$MODE" = "--release" ]; then
+  UPDATE_KEYS="<key>SUFeedURL</key><string>$RELEASES/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>"
+fi
 
 # The usage descriptions cover the app and everything run in its terminal: macOS asks on the
 # app's behalf when a command there first reaches into a protected folder or another app.
@@ -75,10 +112,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>27.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUEnableAutomaticChecks</key><false/>
+  $UPDATE_KEYS
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -109,10 +148,26 @@ PLIST
 
 # Every build runs under the hardened runtime that notarisation requires, so a local build behaves like the
 # one people download. Only a release needs the secure timestamp, which asks Apple's server.
-SIGN_FLAGS=(--force --options runtime --entitlements Resources/ProcessCode.entitlements)
+SIGN_FLAGS=(--force --options runtime)
 [ "$MODE" = "--release" ] && SIGN_FLAGS+=(--timestamp)
-codesign "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$APP"
-codesign --verify --strict "$APP"
+ENTITLEMENTS="Resources/ProcessCode.entitlements"
+if [ -z "$IDENTITY" ]; then
+  # The hardened runtime loads a framework only if it is signed by the app's own team, and an ad hoc
+  # signature has no team, so an ad hoc build is allowed to load Sparkle anyway.
+  ENTITLEMENTS="$(mktemp -d)/adhoc.entitlements"
+  cp Resources/ProcessCode.entitlements "$ENTITLEMENTS"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENTITLEMENTS"
+fi
+# Sparkle's helpers are signed from the inside out, as its documentation orders them, and without the
+# app's entitlements; the downloader keeps the ones it came with.
+FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+codesign "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$FRAMEWORK/Versions/B/XPCServices/Installer.xpc"
+codesign "${SIGN_FLAGS[@]}" --preserve-metadata=entitlements --sign "${IDENTITY:--}" "$FRAMEWORK/Versions/B/XPCServices/Downloader.xpc"
+codesign "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$FRAMEWORK/Versions/B/Autoupdate"
+codesign "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$FRAMEWORK/Versions/B/Updater.app"
+codesign "${SIGN_FLAGS[@]}" --sign "${IDENTITY:--}" "$FRAMEWORK"
+codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" --sign "${IDENTITY:--}" "$APP"
+codesign --verify --deep --strict "$APP"
 echo "Built $APP (signed with: ${IDENTITY:-ad-hoc})"
 
 if [ "$MODE" = "--release" ]; then
@@ -143,6 +198,31 @@ if [ "$MODE" = "--release" ]; then
   hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
   spctl -a -t exec "$MOUNT/$APP_NAME.app"
   echo "Notarised $DMG ($(du -h "$DMG" | cut -f1 | tr -d ' '))"
+
+  # The feed installed copies read: this one version, and the signature of its disk image. It is signed
+  # only now because stapling changed the file. The download is the release's own, not "latest", so the
+  # signature here always belongs to the file it names.
+  SIGNATURE="$("$SPARKLE/bin/sign_update" -p "$DMG")"
+  "$SPARKLE/bin/sign_update" --verify "$DMG" "$SIGNATURE"
+  cat > build/appcast.xml <<APPCAST
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>$APP_NAME</title>
+    <item>
+      <title>Version $VERSION</title>
+      <link>$RELEASES/tag/v$VERSION</link>
+      <sparkle:version>$VERSION</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+      <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+      <enclosure url="$RELEASES/download/v$VERSION/ProcessCode.dmg" length="$(stat -f %z "$DMG")" type="application/octet-stream" sparkle:edSignature="$SIGNATURE" />
+    </item>
+  </channel>
+</rss>
+APPCAST
+  xmllint --noout build/appcast.xml
+  echo "Wrote build/appcast.xml for $VERSION"
   exit 0
 fi
 
