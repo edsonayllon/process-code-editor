@@ -1,11 +1,12 @@
 import AppKit
+import AVFoundation
 import Combine
 import UniformTypeIdentifiers
 
 /// One open file: its tab, its editor (for text) and how it's being viewed.
 final class Document: ObservableObject, Identifiable {
     enum Kind: Equatable {
-        case text, pdf, image
+        case text, pdf, image, video
         /// Shown as a message instead of content (binary or too large).
         case unsupported(String)
     }
@@ -38,6 +39,8 @@ final class Document: ObservableObject, Identifiable {
     @Published var pdfURL: URL?
 
     private(set) var editor: EditorController?
+    /// The player, for a video.
+    private(set) var video: VideoController?
     private var loadedDate: Date?
     private var previewTimer: Timer?
 
@@ -50,12 +53,9 @@ final class Document: ObservableObject, Identifiable {
     init(url: URL) {
         self.url = url
         language = Language.forFile(url)
-        let type = UTType(filenameExtension: url.pathExtension)
         var text: String?
-        if type?.conforms(to: .pdf) == true {
-            kind = .pdf
-        } else if let type, type.conforms(to: .image), !type.conforms(to: .svg) {
-            kind = .image
+        if let media = Document.mediaKind(of: url) {
+            kind = media
         } else if let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
             if data.count > Document.maximumTextSize {
                 kind = .unsupported("This file is too large to edit here (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))).")
@@ -80,7 +80,21 @@ final class Document: ObservableObject, Identifiable {
             self.editor = editor
         }
         if isTeX { pdfURL = Latex.existingPDF(for: url) }
+        if kind == .video { video = VideoController(url: url) }
     }
+
+    /// The kind of a file that's shown rather than edited, going by its name: a PDF, an image, or
+    /// a video in a format the system plays. Nil for everything else, which is read to find out.
+    static func mediaKind(of url: URL) -> Kind? {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return nil }
+        if type.conforms(to: .pdf) { return .pdf }
+        if type.conforms(to: .image), !type.conforms(to: .svg) { return .image }
+        if type.conforms(to: .movie), playableTypes.contains(where: type.conforms(to:)) { return .video }
+        return nil
+    }
+
+    /// The containers AVFoundation opens (MP4, QuickTime and the like; not WebM or Matroska).
+    private static let playableTypes = AVURLAsset.audiovisualContentTypes
 
     private static func modificationDate(_ url: URL) -> Date? {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
@@ -109,6 +123,8 @@ final class Document: ObservableObject, Identifiable {
         switch kind {
         case .pdf, .image:
             revision += 1
+        case .video:
+            video?.reload()
         case .text:
             guard let date = Document.modificationDate(url), date != loadedDate else { return }
             if isDirty { changedOnDisk = true } else { reload() }

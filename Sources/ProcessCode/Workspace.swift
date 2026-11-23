@@ -11,6 +11,45 @@ struct TreeRow: Identifiable, Equatable {
     var name: String { url.lastPathComponent }
 }
 
+/// Which file each pane shows: the main pane, and the one beside it when two files are being
+/// compared. A file is in one pane at most, since a text file has a single editor.
+struct Panes: Equatable {
+    var active: String?
+    var side: String?
+
+    /// Shows a file, in the main pane or at the side. `ids` are the open files, in tab order.
+    mutating func show(_ id: String, toSide: Bool, among ids: [String]) {
+        guard toSide, let active else {
+            // A file already at the side stays there: it's on screen.
+            if side != id { active = id }
+            return
+        }
+        if active == id {
+            // It moves across, and the main pane takes what was at the side, or the tab next to
+            // it. With no other file open there's nothing to put beside it.
+            guard let other = side ?? Panes.neighbour(of: id, in: ids) else { return }
+            self.active = other
+        }
+        side = id
+    }
+
+    /// Takes a file that's being closed out of its pane. `ids` still has it.
+    mutating func remove(_ id: String, from ids: [String]) {
+        if side == id { side = nil }
+        guard active == id else { return }
+        // The tab next to it, or with no other, the file at the side, which is then alone.
+        active = Panes.neighbour(of: id, in: ids.filter { $0 != side }) ?? side
+        if active == side { side = nil }
+    }
+
+    /// The tab that takes a closing tab's place: the one after it, or the last.
+    private static func neighbour(of id: String, in ids: [String]) -> String? {
+        guard let index = ids.firstIndex(of: id) else { return ids.last }
+        let rest = ids.filter { $0 != id }
+        return rest.isEmpty ? nil : rest[min(index, rest.count - 1)]
+    }
+}
+
 enum SidebarMode: String {
     case files, changes
 }
@@ -40,6 +79,8 @@ final class Workspace: ObservableObject {
     // Files
     @Published var documents: [Document] = []
     @Published var activeDocumentID: String?
+    /// The file shown beside the active one, to compare the two.
+    @Published var sideDocumentID: String?
 
     // Terminal
     @Published var terminals: [TerminalSession] = []
@@ -58,6 +99,20 @@ final class Workspace: ObservableObject {
     private let defaults = UserDefaults.standard
 
     var activeDocument: Document? { documents.first { $0.id == activeDocumentID } }
+    var sideDocument: Document? { documents.first { $0.id == sideDocumentID } }
+    /// The file the keyboard is in: the one at the side while its editor is being typed in,
+    /// otherwise the active one. Save and Close Tab act on it.
+    var focusedDocument: Document? {
+        if let side = sideDocument, let view = side.editor?.textView, view.window?.firstResponder === view { return side }
+        return activeDocument
+    }
+    private var panes: Panes {
+        get { Panes(active: activeDocumentID, side: sideDocumentID) }
+        set {
+            if newValue.active != activeDocumentID { activeDocumentID = newValue.active }
+            if newValue.side != sideDocumentID { sideDocumentID = newValue.side }
+        }
+    }
     var activeTerminal: TerminalSession? { terminals.first { $0.id == activeTerminalID } }
     /// The editor is on screen: there's a file open and the terminal isn't covering it.
     var editorShown: Bool { !documents.isEmpty && !(terminalVisible && terminalMaximized) }
@@ -99,6 +154,9 @@ final class Workspace: ObservableObject {
             if FileManager.default.fileExists(atPath: url.path) { add(Document(url: url)) }
         }
         activeDocumentID = (saved["active"] as? String).flatMap { path in documents.first { relativePath(of: $0.url) == path }?.id } ?? documents.first?.id
+        if let side = (saved["side"] as? String).flatMap({ path in documents.first { relativePath(of: $0.url) == path }?.id }), side != activeDocumentID {
+            sideDocumentID = side
+        }
         terminalMaximized = documents.isEmpty || (saved["terminalMaximized"] as? Bool ?? false)
         newTerminal(agent: launchAgent ? Settings.shared.agent : nil)
     }
@@ -153,6 +211,7 @@ final class Workspace: ObservableObject {
             "expanded": Array(expanded),
             "documents": documents.map { relativePath(of: $0.url) },
             "active": activeDocument.map { relativePath(of: $0.url) } ?? "",
+            "side": sideDocument.map { relativePath(of: $0.url) } ?? "",
             "terminalMaximized": terminalMaximized,
         ] as [String: Any], forKey: stateKey)
         defaults.set(Double(sidebarWidth), forKey: "sidebarWidth")
@@ -310,7 +369,8 @@ final class Workspace: ObservableObject {
         documentObservers[document.id] = document.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
-    func open(_ url: URL, line: Int? = nil) {
+    /// Opens a file in the main pane, or `toSide`, beside the file that's there.
+    func open(_ url: URL, line: Int? = nil, toSide: Bool = false) {
         let url = url.standardizedFileURL
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return }
@@ -321,7 +381,7 @@ final class Workspace: ObservableObject {
             document = Document(url: url)
             add(document)
         }
-        activeDocumentID = document.id
+        panes.show(document.id, toSide: toSide, among: documents.map(\.id))
         selectedPath = url.path
         if terminalMaximized { terminalMaximized = false }
         DispatchQueue.main.async {
@@ -332,7 +392,7 @@ final class Workspace: ObservableObject {
     }
 
     func activate(_ document: Document) {
-        activeDocumentID = document.id
+        panes.show(document.id, toSide: false, among: documents.map(\.id))
         selectedPath = document.url.path
         if terminalMaximized { terminalMaximized = false }
         DispatchQueue.main.async { document.editor?.focus() }
@@ -355,11 +415,11 @@ final class Workspace: ObservableObject {
             }
         }
         guard let index = documents.firstIndex(where: { $0.id == document.id }) else { return true }
+        var panes = self.panes
+        panes.remove(document.id, from: documents.map(\.id))
         documents.remove(at: index)
         documentObservers[document.id] = nil
-        if activeDocumentID == document.id {
-            activeDocumentID = documents.isEmpty ? nil : documents[min(index, documents.count - 1)].id
-        }
+        self.panes = panes
         if documents.isEmpty {
             terminalVisible = true
             focusTerminal()
@@ -383,7 +443,14 @@ final class Workspace: ObservableObject {
     }
 
     func saveActive() {
-        if let document = activeDocument, document.kind == .text { save(document) }
+        if let document = focusedDocument, document.kind == .text { save(document) }
+    }
+
+    /// Puts the side pane away. Its file stays open, as a tab.
+    func closeSide() {
+        sideDocumentID = nil
+        DispatchQueue.main.async { self.activeDocument?.editor?.focus() }
+        saveState()
     }
 
     /// Builds a LaTeX file to PDF, off the main thread.
@@ -405,8 +472,10 @@ final class Workspace: ObservableObject {
     var hasUnsavedChanges: Bool { documents.contains { $0.isDirty } }
 
     func selectAdjacentDocument(_ offset: Int) {
-        guard let index = documents.firstIndex(where: { $0.id == activeDocumentID }), documents.count > 1 else { return }
-        activate(documents[(index + offset + documents.count) % documents.count])
+        // The file at the side keeps its place; the main pane steps through the rest.
+        let others = documents.filter { $0.id != sideDocumentID }
+        guard let index = others.firstIndex(where: { $0.id == activeDocumentID }), others.count > 1 else { return }
+        activate(others[(index + offset + others.count) % others.count])
     }
 
     // MARK: Terminal

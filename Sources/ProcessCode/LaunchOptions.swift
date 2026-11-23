@@ -22,6 +22,8 @@ struct LaunchOptions {
     /// Start a plain shell even if an agent is set to start.
     var plainShell = false
     var snapshot: String?
+    /// A file to show beside the last one opened.
+    var side: String?
     var delay = 2.5
     var size: NSSize?
     /// Checks: paste into the terminal, press Shift-Return in it, report what a click at a point would hit.
@@ -55,6 +57,7 @@ struct LaunchOptions {
             let argument = arguments[index]
             switch argument {
             case "--open": if let v = value() { files.append(v) }
+            case "--side": side = value()
             case "--appearance": appearance = value().flatMap(Appearance.init(rawValue:))
             case "--mode": mode = value().flatMap(Document.Mode.init(rawValue:))
             case "--layout": layout = value()
@@ -114,6 +117,7 @@ struct LaunchOptions {
         let workspace = controller.workspace
         if let size { window.setContentSize(size); window.center() }
         for file in files { workspace.open(workspace.root.appendingPathComponent(file)) }
+        if let side { workspace.open(workspace.root.appendingPathComponent(side), toSide: true) }
         if let mode { workspace.activeDocument?.mode = mode }
         switch layout {
         case "terminal": workspace.terminalVisible = true; workspace.terminalMaximized = true

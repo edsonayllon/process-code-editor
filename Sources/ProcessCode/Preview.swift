@@ -1,4 +1,5 @@
 import AppKit
+import AVKit
 import cmark_gfm
 import cmark_gfm_extensions
 import PDFKit
@@ -319,5 +320,158 @@ struct MessageView<Actions: View>: View {
 extension MessageView where Actions == EmptyView {
     init(icon: String, title: String, detail: String? = nil) {
         self.init(icon: icon, title: title, detail: detail) { EmptyView() }
+    }
+}
+
+// MARK: Video
+
+/// Plays one video file. The document owns it, so the place and the playing carry on when its
+/// pane is rebuilt, and two of them can be played together.
+final class VideoController: ObservableObject {
+    let url: URL
+    let player = AVPlayer()
+    /// The file couldn't be played, and nothing from before is showing in its place.
+    @Published private(set) var failed = false
+    @Published private(set) var isPlaying = false
+    /// The picture's width over its height, once known. The player is given that shape, so the
+    /// space around it is the window's colour rather than black bars.
+    @Published private(set) var aspect: CGFloat?
+
+    private var attempt = 0
+    private var observer: NSKeyValueObservation?
+    private var ended: NSObjectProtocol?
+    private var sizeObserver: NSKeyValueObservation?
+
+    init(url: URL) {
+        self.url = url
+        observer = player.observe(\.timeControlStatus) { [weak self] player, _ in
+            let playing = player.timeControlStatus != .paused
+            DispatchQueue.main.async { if self?.isPlaying != playing { self?.isPlaying = playing } }
+        }
+        sizeObserver = player.observe(\.currentItem?.presentationSize) { [weak self] player, _ in
+            guard let size = player.currentItem?.presentationSize, size.width > 0, size.height > 0 else { return }
+            let aspect = size.width / size.height
+            DispatchQueue.main.async { if self?.aspect != aspect { self?.aspect = aspect } }
+        }
+        // A video goes round again when it runs out: the clips compared here last a second or two.
+        player.actionAtItemEnd = .none
+        ended = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
+            guard let self, note.object as? AVPlayerItem === self.player.currentItem else { return }
+            self.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
+        }
+        load(keepPosition: false, triesLeft: 8)
+    }
+
+    deinit {
+        if let ended { NotificationCenter.default.removeObserver(ended) }
+    }
+
+    /// The file was rewritten: shows the new one, at the same place and still playing if it was.
+    func reload() {
+        load(keepPosition: true, triesLeft: 8)
+    }
+
+    /// A video that is still being written doesn't play yet, so a failed read is tried again
+    /// shortly, and what was showing stays until the new file is ready.
+    private func load(keepPosition: Bool, triesLeft: Int) {
+        attempt += 1
+        let attempt = attempt
+        let asset = AVURLAsset(url: url)
+        Task { @MainActor [weak self] in
+            let playable = (try? await asset.load(.isPlayable)) ?? false
+            guard let self, self.attempt == attempt else { return }
+            guard playable else {
+                if triesLeft > 0 {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    if self.attempt == attempt { self.load(keepPosition: keepPosition, triesLeft: triesLeft - 1) }
+                } else if self.player.currentItem == nil {
+                    self.failed = true
+                }
+                return
+            }
+            let time = self.player.currentTime()
+            let wasPlaying = self.player.rate != 0
+            let hadItem = self.player.currentItem != nil
+            self.player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+            self.failed = false
+            if keepPosition, hadItem {
+                _ = await self.player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                if wasPlaying, self.attempt == attempt { self.player.play() }
+            }
+        }
+    }
+
+    func pause() { player.pause() }
+
+    private var atEnd: Bool {
+        guard let duration = player.currentItem?.duration, duration.isNumeric else { return false }
+        return player.currentTime() >= duration
+    }
+
+    /// Plays two videos from the same moment (the first one's), or stops both. From the start
+    /// again if the first has run out.
+    static func togglePlaying(_ first: VideoController, _ second: VideoController) {
+        if first.isPlaying || second.isPlaying {
+            first.pause()
+            second.pause()
+            return
+        }
+        let time = first.atEnd ? CMTime.zero : first.player.currentTime()
+        seek(first, second, to: time) {
+            first.player.play()
+            second.player.play()
+        }
+    }
+
+    /// Takes both back to the start, playing or not.
+    static func restart(_ first: VideoController, _ second: VideoController) {
+        seek(first, second, to: .zero) {}
+    }
+
+    private static func seek(_ first: VideoController, _ second: VideoController, to time: CMTime, then: @escaping () -> Void) {
+        let group = DispatchGroup()
+        for controller in [first, second] {
+            group.enter()
+            controller.player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in group.leave() }
+        }
+        group.notify(queue: .main, execute: then)
+    }
+}
+
+struct VideoPreview: View {
+    @ObservedObject var controller: VideoController
+
+    var body: some View {
+        if controller.failed {
+            MessageView(icon: "film", title: "This video couldn't be played.") {
+                Button("Open in Default App") { NSWorkspace.shared.open(controller.url) }
+            }
+        } else {
+            VideoPlayerHost(controller: controller)
+                .aspectRatio(controller.aspect, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct VideoPlayerHost: NSViewRepresentable {
+    let controller: VideoController
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        view.player = controller.player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== controller.player { view.player = controller.player }
+    }
+
+    /// A video that's no longer on screen (its tab was left or closed) stops, sound and all.
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
     }
 }

@@ -23,8 +23,12 @@ used for in that setup, in a 4 MB app that idles around 60 MB of memory instead 
   JSON, Rust, C-family, Go, GDScript, Solidity, shell, YAML, TOML, CSS, SQL, HTML, Markdown, LaTeX and more), line
   numbers, find, undo, and indentation that follows the file. Files that change on disk reload by themselves unless
   you've edited them.
-- **Previews**: Markdown as GitHub renders it, side by side with the source or alone; PDFs and images; and LaTeX,
-  which builds to PDF on save and shows the result beside the source.
+- **Previews**: Markdown as GitHub renders it, side by side with the source or alone; PDFs, images and videos; and
+  LaTeX, which builds to PDF on save and shows the result beside the source.
+- **Two files side by side.** Option-click a file in the sidebar (or right-click it, Open to the Side) and it opens
+  beside the one that's showing, each under its name. Clicking other files then changes the first pane and leaves the
+  second where it is. With a video in each, one button in the top bar plays both from the same moment and another
+  takes both back to the start, and a video that's rendered again is shown again at the same place.
 
 Settings are deliberately few: light, dark or the system's, the code font and its size, and which agent starts.
 
@@ -103,6 +107,7 @@ behaves like the release. Notarisation takes a few minutes and gives up after 20
 | Clear the terminal                       | ⌘K        |
 | Next / previous tab (of the focused pane)| ⇧⌘] / ⇧⌘[ |
 | Source, side by side, preview            | ⇧⌘V       |
+| Move the tab to the side / close the side| ⌘\         |
 | Save (builds LaTeX)                      | ⌘S        |
 | Close tab / close window                 | ⌘W / ⇧⌘W  |
 | Toggle comment                           | ⌘/        |

@@ -220,6 +220,54 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(Workspace.match("zzz", in: files), [])
     }
 
+    func testVideosThePlayerOpensAreShownOthersAreNot() {
+        XCTAssertEqual(Document.mediaKind(of: URL(fileURLWithPath: "/x/clip.mp4")), .video)
+        XCTAssertEqual(Document.mediaKind(of: URL(fileURLWithPath: "/x/clip.MOV")), .video)
+        XCTAssertEqual(Document.mediaKind(of: URL(fileURLWithPath: "/x/still.png")), .image)
+        XCTAssertEqual(Document.mediaKind(of: URL(fileURLWithPath: "/x/paper.pdf")), .pdf)
+        XCTAssertNil(Document.mediaKind(of: URL(fileURLWithPath: "/x/clip.webm")), "not a format the system plays")
+        XCTAssertNil(Document.mediaKind(of: URL(fileURLWithPath: "/x/icon.svg")), "edited as text")
+        XCTAssertNil(Document.mediaKind(of: URL(fileURLWithPath: "/x/main.swift")))
+    }
+
+    func testAFileIsInOnePaneAtMost() {
+        let ids = ["a", "b", "c"]
+        var panes = Panes(active: "a", side: nil)
+        panes.show("b", toSide: true, among: ids)
+        XCTAssertEqual(panes, Panes(active: "a", side: "b"), "beside the file that's showing")
+        panes.show("c", toSide: false, among: ids)
+        XCTAssertEqual(panes, Panes(active: "c", side: "b"), "the side stays while the main pane changes")
+        panes.show("b", toSide: false, among: ids)
+        XCTAssertEqual(panes, Panes(active: "c", side: "b"), "a file at the side stays there")
+        panes.show("c", toSide: true, among: ids)
+        XCTAssertEqual(panes, Panes(active: "b", side: "c"), "the two change places")
+
+        panes = Panes(active: "b", side: nil)
+        panes.show("b", toSide: true, among: ids)
+        XCTAssertEqual(panes, Panes(active: "c", side: "b"), "the next tab takes the main pane")
+        panes = Panes(active: "a", side: nil)
+        panes.show("a", toSide: true, among: ["a"])
+        XCTAssertEqual(panes, Panes(active: "a", side: nil), "nothing to put beside it")
+        panes = Panes(active: nil, side: nil)
+        panes.show("a", toSide: true, among: ["a"])
+        XCTAssertEqual(panes, Panes(active: "a", side: nil), "the first file takes the main pane")
+    }
+
+    func testClosingAFileLeavesThePanesFilled() {
+        var panes = Panes(active: "a", side: "b")
+        panes.remove("b", from: ["a", "b", "c"])
+        XCTAssertEqual(panes, Panes(active: "a", side: nil))
+        panes = Panes(active: "a", side: "b")
+        panes.remove("a", from: ["a", "b", "c"])
+        XCTAssertEqual(panes, Panes(active: "c", side: "b"), "the next tab that isn't at the side")
+        panes = Panes(active: "a", side: "b")
+        panes.remove("a", from: ["a", "b"])
+        XCTAssertEqual(panes, Panes(active: "b", side: nil), "the file at the side is then alone")
+        panes = Panes(active: "a", side: nil)
+        panes.remove("a", from: ["a"])
+        XCTAssertEqual(panes, Panes(active: nil, side: nil))
+    }
+
     func testIndentIsReadFromTheFile() {
         XCTAssertEqual(EditorController.indentUnit(of: "a {\n  b\n}", language: .swift), "  ")
         XCTAssertEqual(EditorController.indentUnit(of: "a {\n\tb\n}", language: .swift), "\t")

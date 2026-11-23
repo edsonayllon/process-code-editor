@@ -373,6 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             add(m, "Hide Margins", #selector(toggleMargins(_:)), "m", [.command, .shift])
             m.addItem(.separator())
             add(m, "Cycle Source and Preview", #selector(cyclePreview(_:)), "v", [.command, .shift])
+            add(m, "Move Tab to the Side", #selector(toggleSide(_:)), "\\")
             m.addItem(.separator())
             add(m, "Next Tab", #selector(nextTab(_:)), "]", [.command, .shift])
             add(m, "Previous Tab", #selector(previousTab(_:)), "[", [.command, .shift])
@@ -420,11 +421,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item.title = "Start \(Settings.shared.agent?.name ?? "Agent")"
             return workspace != nil
         case #selector(save(_:)):
-            return workspace?.activeDocument?.kind == .text
+            return workspace?.focusedDocument?.kind == .text
         case #selector(closeTab(_:)):
-            return workspace?.activeDocument != nil
+            return workspace?.focusedDocument != nil
         case #selector(cyclePreview(_:)):
-            return workspace?.activeDocument?.hasPreview == true
+            return workspace?.focusedDocument?.hasPreview == true
+        case #selector(toggleSide(_:)):
+            // The file at the side goes back to being a tab; any other goes to the side.
+            let atSide = workspace?.sideDocument != nil && workspace?.focusedDocument === workspace?.sideDocument
+            item.title = atSide ? "Close Side Pane" : "Move Tab to the Side"
+            return workspace.map { $0.editorShown && (atSide || $0.documents.count > 1) } ?? false
         case #selector(closeTerminal(_:)), #selector(clearTerminal(_:)):
             return workspace?.activeTerminal != nil
         case #selector(newFile(_:)), #selector(goToFile(_:)), #selector(newTerminal(_:)), #selector(nextTab(_:)), #selector(previousTab(_:)):
@@ -471,7 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func save(_ sender: Any?) { workspace?.saveActive() }
 
     @objc func closeTab(_ sender: Any?) {
-        if let workspace, let document = workspace.activeDocument { workspace.close(document) }
+        if let workspace, let document = workspace.focusedDocument { workspace.close(document) }
     }
 
     @objc func toggleTerminalMaximized(_ sender: Any?) { workspace?.toggleTerminalMaximized() }
@@ -486,9 +492,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func cyclePreview(_ sender: Any?) {
-        guard let document = workspace?.activeDocument, document.hasPreview else { return }
+        guard let document = workspace?.focusedDocument, document.hasPreview else { return }
         let modes = Document.Mode.allCases
         document.mode = modes[(modes.firstIndex(of: document.mode)! + 1) % modes.count]
+    }
+
+    /// ⌘\ puts the tab beside the next one, or with the keyboard in the side pane, closes that pane.
+    @objc func toggleSide(_ sender: Any?) {
+        guard let workspace, let document = workspace.focusedDocument else { return }
+        if document === workspace.sideDocument { workspace.closeSide() } else { workspace.open(document.url, toSide: true) }
     }
 
     private var terminalHasFocus: Bool { NSApp.keyWindow?.firstResponder is LeanTerminalView }

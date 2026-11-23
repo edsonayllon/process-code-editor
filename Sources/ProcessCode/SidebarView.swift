@@ -268,10 +268,15 @@ private struct TreeRowView: View {
         .onDrag { NSItemProvider(object: row.url as NSURL) }
         .onTapGesture {
             workspace.selectedPath = row.url.path
-            if row.isDirectory { workspace.toggle(row) } else { workspace.open(row.url) }
+            // With Option held, a file opens beside the one that's showing.
+            if row.isDirectory { workspace.toggle(row) } else { workspace.open(row.url, toSide: NSEvent.modifierFlags.contains(.option)) }
         }
         .contextMenu {
             let folder = row.isDirectory ? row.url : row.url.deletingLastPathComponent()
+            if !row.isDirectory {
+                Button("Open to the Side") { workspace.open(row.url, toSide: true) }
+                Divider()
+            }
             Button("New File…") { workspace.newItem(directory: false, in: folder) }
             Button("New Folder…") { workspace.newItem(directory: true, in: folder) }
             Divider()

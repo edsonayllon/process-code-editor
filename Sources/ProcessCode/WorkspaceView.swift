@@ -40,8 +40,22 @@ struct WorkspaceView: View {
         GeometryReader { area in
             VStack(spacing: 0) {
                 if workspace.editorShown, let document = workspace.activeDocument {
-                    DocumentView(document: document, workspace: workspace)
-                        .id(document.id)
+                    HStack(spacing: 0) {
+                        if let side = workspace.sideDocument {
+                            // Two files, half the width each, with their names above them.
+                            let width = max((area.size.width - 1) / 2, 0)
+                            DocumentPane(document: document, workspace: workspace, atSide: false)
+                                .id(document.id)
+                                .frame(width: width)
+                            Divider1(axis: .vertical)
+                            DocumentPane(document: side, workspace: workspace, atSide: true)
+                                .id(side.id)
+                                .frame(width: width)
+                        } else {
+                            DocumentView(document: document, workspace: workspace)
+                                .id(document.id)
+                        }
+                    }
                         .frame(height: workspace.terminalVisible ? max(area.size.height * (1 - workspace.terminalFraction), 80) : nil)
                     if workspace.terminalVisible {
                         Divider1(axis: .horizontal, onDrag: { y in
@@ -114,10 +128,21 @@ struct TopBar: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 2) {
                             ForEach(workspace.documents) { document in
-                                Tab(title: document.name, selected: document.id == workspace.activeDocumentID && workspace.editorShown,
+                                let atSide = document.id == workspace.sideDocumentID
+                                Tab(title: document.name, selected: (document.id == workspace.activeDocumentID || atSide) && workspace.editorShown,
                                     dirty: document.isDirty, help: workspace.relativePath(of: document.url),
                                     select: { workspace.activate(document) }, close: { workspace.close(document) })
                                     .id(document.id)
+                                    .contextMenu {
+                                        if atSide {
+                                            Button("Close Side Pane") { workspace.closeSide() }
+                                        } else {
+                                            Button("Move to the Side") { workspace.open(document.url, toSide: true) }
+                                                .disabled(workspace.documents.count < 2)
+                                        }
+                                        Divider()
+                                        Button("Close Tab") { workspace.close(document) }
+                                    }
                             }
                         }
                     }
@@ -130,6 +155,9 @@ struct TopBar: View {
 
             if workspace.editorShown, let document = workspace.activeDocument, document.hasPreview {
                 DocumentControls(document: document, workspace: workspace)
+            }
+            if workspace.editorShown, let first = workspace.activeDocument?.video, let second = workspace.sideDocument?.video {
+                CompareControls(first: first, second: second)
             }
             AgentButton(workspace: workspace)
             Button { workspace.toggleTerminal() } label: { Image(systemName: "rectangle.bottomthird.inset.filled") }
@@ -337,6 +365,37 @@ private struct DocumentControls: View {
     }
 }
 
+/// For two videos side by side: plays and stops them as one, and takes both back to the start.
+private struct CompareControls: View {
+    @ObservedObject var first: VideoController
+    @ObservedObject var second: VideoController
+
+    var body: some View {
+        let playing = first.isPlaying || second.isPlaying
+        HStack(spacing: 0) {
+            button("backward.end.fill", help: "Both Back to the Start") { VideoController.restart(first, second) }
+            button(playing ? "pause.fill" : "play.fill", help: playing ? "Pause Both" : "Play Both from the Same Moment") {
+                VideoController.togglePlaying(first, second)
+            }
+        }
+        .padding(2)
+        .glassEffect(.regular, in: Capsule())
+        .disabled(first.failed || second.failed)
+    }
+
+    private func button(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.text)
+                .frame(width: 32, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
 /// Starts the coding agent in a new terminal tab; the arrow picks which agent that is.
 private struct AgentButton: View {
     let workspace: Workspace
@@ -386,6 +445,37 @@ private struct AgentButton: View {
 
 // MARK: The open file
 
+/// One of two files side by side, under its name. The one at the side has a button to put it away.
+private struct DocumentPane: View {
+    @ObservedObject var document: Document
+    let workspace: Workspace
+    let atSide: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(document.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(workspace.relativePath(of: document.url))
+                Spacer(minLength: 0)
+                if atSide {
+                    Button { workspace.closeSide() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(IconButtonStyle())
+                        .help("Close Side Pane")
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 8)
+            .frame(height: 32)
+            DocumentView(document: document, workspace: workspace)
+        }
+        .background(Theme.background)
+    }
+}
+
 /// The active file: its text, its rendered result, or both.
 private struct DocumentView: View {
     @ObservedObject var document: Document
@@ -432,6 +522,8 @@ private struct DocumentView: View {
             PDFPreview(url: document.url, revision: document.revision)
         case .image:
             ImagePreview(url: document.url, revision: document.revision)
+        case .video:
+            if let video = document.video { VideoPreview(controller: video) }
         case .unsupported(let message):
             MessageView(icon: "doc", title: message) {
                 Button("Open in Default App") { NSWorkspace.shared.open(document.url) }
