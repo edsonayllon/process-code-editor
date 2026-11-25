@@ -1,5 +1,6 @@
 #!/bin/bash
-# Cuts a release from main with semantic-release, on this Mac (no GitHub Actions). The commits since the last
+# Cuts a release from the release branch with semantic-release, on this Mac (no GitHub Actions). main reaches
+# release through a pull request; check out release and pull before running this. The commits since the last
 # tag decide the version (fix: patch, feat: minor, a breaking change: major); with nothing to release it stops
 # there. Otherwise it builds and notarises the DMG at that version (build-app.sh --release), pushes the tag
 # vX.Y.Z and publishes a GitHub release with ProcessCode.dmg attached. Pass --dry-run to see the next version
@@ -13,15 +14,15 @@ case "${1:-}" in
 esac
 
 # The tag has to name a commit that is on GitHub and holds exactly what was built.
-if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
-  echo "Releases are cut from main; this is $(git rev-parse --abbrev-ref HEAD)." >&2; exit 1
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "release" ]; then
+  echo "Releases are cut from release; this is $(git rev-parse --abbrev-ref HEAD)." >&2; exit 1
 fi
 if [ -n "$(git status --porcelain)" ]; then
   echo "Commit or stash your changes first; a release is built from a clean tree." >&2; exit 1
 fi
-git fetch --quiet --tags origin main
-if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-  echo "main and origin/main differ. Push or pull first." >&2; exit 1
+git fetch --quiet --tags origin release
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/release)" ]; then
+  echo "release and origin/release differ. Push or pull first." >&2; exit 1
 fi
 
 GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
