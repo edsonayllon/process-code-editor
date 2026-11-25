@@ -102,7 +102,7 @@ struct ProjectsView: View {
             switch kind {
             case .clone: CloneSheet(store: store, finished: finished)
             case .new: NewRepositorySheet(store: store, finished: finished)
-            case .publish(let project): PublishSheet(project: project, finished: published)
+            case .publish(let project): PublishSheet(project: project, finished: published, failed: { store.refresh() })
             }
         }
         .alert(
@@ -351,6 +351,8 @@ private struct SheetFrame<Content: View>: View {
     /// Runs off the main thread; returns the folder to open.
     let action: () -> Result<URL, ProjectError>
     let finished: (URL) -> Void
+    /// After a failure, which may still have changed something on disk.
+    var failed: () -> Void = {}
     @ViewBuilder var content: Content
 
     @Environment(\.dismiss) private var dismiss
@@ -399,7 +401,9 @@ private struct SheetFrame<Content: View>: View {
                 busy = false
                 switch result {
                 case .success(let url): finished(url)
-                case .failure(let failure): error = failure.message
+                case .failure(let failure):
+                    error = failure.message
+                    failed()
                 }
             }
         }
@@ -553,7 +557,9 @@ private struct NewRepositorySheet: View {
                    busyText: publish ? "Creating and publishing…" : "Creating…",
                    canConfirm: !name.trimmingCharacters(in: .whitespaces).isEmpty,
                    action: { ProjectStore.create(name: name, readme: readme, publish: publish, isPrivate: isPrivate, in: root) },
-                   finished: finished) {
+                   finished: finished,
+                   // If it was made but not published, it's on the list to publish or push from.
+                   failed: { store.refresh() }) {
             TextField("", text: $name, prompt: Text("Name")).field().focused($focused)
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Start with a README and a first commit", isOn: $readme)
@@ -573,8 +579,6 @@ private struct NewRepositorySheet: View {
         }
         .frame(width: 420)
         .onAppear { focused = true }
-        // If it was made but publishing failed, it's on the list to publish from its menu.
-        .onDisappear { store.refresh() }
     }
 }
 
@@ -582,6 +586,7 @@ private struct NewRepositorySheet: View {
 private struct PublishSheet: View {
     let project: Project
     let finished: (URL) -> Void
+    let failed: () -> Void
     @State private var name = ""
     @State private var description = ""
     @State private var isPrivate = true
@@ -591,16 +596,18 @@ private struct PublishSheet: View {
         let project = self.project
         let githubName = name, about = description, makePrivate = isPrivate
         SheetFrame(title: "Publish “\(project.name)” to GitHub", confirm: "Publish", busyText: "Publishing…",
-                   canConfirm: !githubName.trimmingCharacters(in: .whitespaces).isEmpty,
+                   canConfirm: !ProjectStore.githubName(for: githubName).isEmpty,
                    action: { ProjectStore.publish(project, name: githubName, description: about, isPrivate: makePrivate) },
-                   finished: finished) {
+                   finished: finished, failed: failed) {
             TextField("", text: $name, prompt: Text("Name on GitHub")).field().focused($focused)
             TextField("", text: $description, prompt: Text("Description (optional)")).field()
             Toggle("Keep it private", isOn: $isPrivate)
                 .font(.system(size: 13))
-            Text(project.hasCommits
-                 ? "Makes the repository on your GitHub account, sets it as origin and pushes."
-                 : "Makes the repository on your GitHub account and sets it as origin. There are no commits to push yet.")
+            let cleaned = ProjectStore.githubName(for: githubName)
+            Text((project.hasCommits
+                  ? "Makes the repository on your GitHub account, sets it as origin and pushes."
+                  : "Makes the repository on your GitHub account and sets it as origin. There are no commits to push yet.")
+                 + (cleaned.isEmpty || cleaned == githubName.trimmingCharacters(in: .whitespaces) ? "" : " It will be named “\(cleaned)”."))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

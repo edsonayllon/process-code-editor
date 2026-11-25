@@ -490,19 +490,31 @@ final class ProjectStore: ObservableObject {
             Shell.run("/usr/bin/env", ["git", "commit", "-m", "Initial commit"], in: url)
         }
         guard publish else { return .success(url) }
-        switch ProjectStore.publish(Project(path: path), name: githubName(for: name), description: "", isPrivate: isPrivate) {
+        switch ProjectStore.publish(Project(path: path), name: name, description: "", isPrivate: isPrivate) {
         case .success: return .success(url)
         case .failure(let failure):
-            return .failure(ProjectError(message: "“\(name)” was created, but publishing it failed: \(failure.message)\n\nPublish it from its right-click menu in Projects."))
+            return .failure(ProjectError(message: "“\(name)” was created on this Mac. \(failure.message)"))
         }
     }
 
     /// A folder name made into one GitHub accepts: anything besides letters, digits, ".", "_" and "-"
-    /// becomes a dash.
+    /// becomes a dash, and it doesn't start with a dash (which gh would read as an option).
     nonisolated static func githubName(for name: String) -> String {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
         let mapped = name.trimmingCharacters(in: .whitespaces).unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
-        return mapped.replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+        let single = mapped.replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+        return String(single.drop { $0 == "-" })
+    }
+
+    /// What to say when publishing failed, and how to finish. gh makes the GitHub repository and adds
+    /// origin before it pushes, so a failed push leaves a remote behind, and publishing again would be
+    /// refused: then the way on is to push.
+    nonisolated static func publishFailure(_ output: String, remoteAdded: Bool, branch: String?) -> String {
+        guard remoteAdded else {
+            return "Publishing failed: \(output)\n\nPublish it again from its right-click menu in Projects."
+        }
+        return "GitHub made the repository and set it as origin, but the push didn't finish: \(output)\n\n"
+            + "Push it from the terminal: git push -u origin \(branch ?? "main")"
     }
 
     /// The `gh` arguments that make the GitHub repository, point origin at it and, if there's
@@ -518,13 +530,16 @@ final class ProjectStore: ObservableObject {
 
     /// Makes a GitHub repository for a local one and pushes it. Runs off the main thread.
     nonisolated static func publish(_ project: Project, name rawName: String, description: String, isPrivate: Bool) -> Result<URL, ProjectError> {
-        let name = rawName.trimmingCharacters(in: .whitespaces)
+        let name = githubName(for: rawName)
         guard !name.isEmpty else { return .failure(ProjectError(message: "The repository needs a name on GitHub.")) }
         let fresh = project.inspected()
         guard !fresh.isPublished else { return .failure(ProjectError(message: "This repository already has a remote.")) }
         let arguments = publishArguments(path: project.path, name: name, description: description, isPrivate: isPrivate, hasCommits: fresh.hasCommits)
         let result = Shell.run("/usr/bin/env", arguments, in: project.url)
-        guard result.status == 0 else { return .failure(ProjectError(message: explain(result, tool: "gh"))) }
+        guard result.status == 0 else {
+            let after = project.inspected()
+            return .failure(ProjectError(message: publishFailure(explain(result, tool: "gh"), remoteAdded: after.isPublished, branch: after.branch)))
+        }
         return .success(project.url)
     }
 

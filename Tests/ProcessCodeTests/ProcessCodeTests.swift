@@ -334,6 +334,16 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(ProjectStore.githubName(for: "my project"), "my-project")
         XCTAssertEqual(ProjectStore.githubName(for: " Café  & co. "), "Caf-co.")
         XCTAssertEqual(ProjectStore.githubName(for: "already_fine-1.0"), "already_fine-1.0")
+        XCTAssertEqual(ProjectStore.githubName(for: "-test"), "test", "never read as an option")
+        XCTAssertEqual(ProjectStore.githubName(for: " & "), "")
+    }
+
+    func testAPushThatFailsAfterTheRepositoryIsMadeSaysToPush() {
+        let halfway = ProjectStore.publishFailure("rejected", remoteAdded: true, branch: "trunk")
+        XCTAssertTrue(halfway.contains("git push -u origin trunk"))
+        XCTAssertFalse(halfway.contains("right-click"), "publishing again would be refused")
+        let nothing = ProjectStore.publishFailure("not signed in", remoteAdded: false, branch: "main")
+        XCTAssertTrue(nothing.contains("right-click menu"))
     }
 
     func testPublishArguments() {
@@ -522,5 +532,7 @@ final class ProjectTests: XCTestCase {
         XCTAssertFalse(Project(path: empty.path).inspected().hasCommits)
         XCTAssertThrowsError(try ProjectStore.publish(Project(path: created.path, remote: "x"), name: " ", description: "", isPrivate: true).get(),
                              "a name is needed before anything runs")
+        XCTAssertThrowsError(try ProjectStore.publish(Project(path: created.path), name: "--", description: "", isPrivate: true).get(),
+                             "a name that cleans to nothing is refused before gh runs")
     }
 }
