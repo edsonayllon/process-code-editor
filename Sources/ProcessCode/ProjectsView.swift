@@ -128,12 +128,21 @@ struct ProjectsView: View {
         } message: { Text($0) }
     }
 
-    /// A sheet asked for by a launch option, for a picture of it.
+    /// A sheet asked for by a launch option, for a picture of it. Publish waits until git has read
+    /// the list (up to 10 seconds), so it picks a repository that really isn't on GitHub if there is one.
     private func showRequested(_ name: String) {
+        showRequested(name, tries: 20)
+    }
+
+    private func showRequested(_ name: String, tries: Int) {
         switch name {
         case "clone": sheet = .clone
         case "new": sheet = .new
         case "publish":
+            if (store.isLoading || !store.projects.contains(where: \.isRead)) && tries > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showRequested(name, tries: tries - 1) }
+                return
+            }
             let list = store.visible
             if let project = list.first(where: \.canPublish) ?? list.first { sheet = .publish(project) }
         default: break

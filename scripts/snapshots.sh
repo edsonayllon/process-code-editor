@@ -53,5 +53,5 @@ shot focus    "$DEMO" --shell "${SIZE[@]}" --layout terminal --sidebar hidden --
 shot bars     "$DEMO" --shell "${SIZE[@]}" --layout terminal --sidebar hidden --reveal-bars --type "$COLOURS" --delay 3.5
 shot projects --delay 3
 shot projects-new     --sheet new --delay 3
-shot projects-publish --sheet publish --delay 3.5
+shot projects-publish --sheet publish --delay 5
 shot settings "$DEMO" --shell --settings --delay 2.5
