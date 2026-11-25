@@ -177,8 +177,11 @@ final class ProjectStore: ObservableObject {
     private var privacyLoading = false
     /// A forced load asked for while one was running, to run when it ends.
     private var privacyAgain = false
-    /// Repositories GitHub wouldn't say anything about this session, so they aren't asked again.
-    private var privacyMissed: Set<String> = []
+    /// A forced load to run once the refresh under way has read every remote.
+    private var privacyDue = false
+    /// Repositories owned by someone else, already asked about one by one this session. Each is asked
+    /// once per launch, so a change on GitHub shows by the next one.
+    private var privacyAsked: Set<String> = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -255,8 +258,10 @@ final class ProjectStore: ObservableObject {
         }
     }
 
-    /// Rescans the folder, then reads each repository's state a few at a time.
-    func refresh() {
+    /// Rescans the folder, then reads each repository's state a few at a time. With `askGitHub`, the
+    /// privacy load after it is forced, for a repository that has just been cloned or published.
+    func refresh(askGitHub: Bool = false) {
+        if askGitHub { privacyDue = true }
         generation += 1
         let current = generation
         // Keep what's known, and last time's commit dates, so the list doesn't reshuffle while git runs.
@@ -296,7 +301,8 @@ final class ProjectStore: ObservableObject {
                 let dates = Dictionary(self.projects.compactMap { p in p.lastCommit.map { (p.path, $0.timeIntervalSince1970) } },
                                        uniquingKeysWith: { a, _ in a })
                 self.defaults.set(dates, forKey: "lastCommits")
-                self.loadPrivacy()
+                self.loadPrivacy(force: self.privacyDue)
+                self.privacyDue = false
             }
         }
     }
@@ -320,14 +326,14 @@ final class ProjectStore: ObservableObject {
         privacyLoadedAt = Date()
         privacyLoading = true
         let slugs = Set(projects.filter { $0.webURL?.host == "github.com" }.compactMap { $0.slug?.lowercased() })
-        let skip = Set(privacy.keys).union(privacyMissed)
-        DispatchQueue.global(qos: .utility).async {
+        let skip = privacyAsked
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let answer = ProjectStore.fetchPrivacy(for: slugs, skipping: skip)
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async {
                 guard let self else { return }
                 self.privacyLoading = false
                 if let answer {
-                    self.privacyMissed.formUnion(answer.missed)
+                    self.privacyAsked.formUnion(answer.asked)
                     var map = self.privacy
                     map.merge(answer.found) { _, new in new }
                     if map != self.privacy {
@@ -343,23 +349,24 @@ final class ProjectStore: ObservableObject {
         }
     }
 
-    /// Your own repositories in one call, then each one owned by someone else that isn't known yet,
-    /// on its own. nil when gh can't answer at all (not installed, or not signed in).
-    nonisolated static func fetchPrivacy(for slugs: Set<String>, skipping known: Set<String>) -> (found: [String: Bool], missed: Set<String>)? {
+    /// Your own repositories in one call, then each one owned by someone else that hasn't been asked
+    /// about yet, on its own. nil when gh can't answer at all (not installed, not signed in, or no
+    /// answer within the time limit).
+    nonisolated static func fetchPrivacy(for slugs: Set<String>, skipping asked: Set<String>) -> (found: [String: Bool], asked: Set<String>)? {
         guard case .success(let remotes) = remoteRepositories() else { return nil }
         var map: [String: Bool] = [:]
-        var missed: Set<String> = []
         for remote in remotes { map[remote.nameWithOwner.lowercased()] = remote.isPrivate }
-        for slug in slugs where map[slug] == nil && !known.contains(slug) {
-            let result = Shell.run("/usr/bin/env", ["gh", "repo", "view", slug, "--json", "isPrivate", "--jq", ".isPrivate"], mergingErrors: false)
-            if result.status == 0 {
-                map[slug] = result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
-            } else {
-                missed.insert(slug)
-            }
+        let others = slugs.filter { map[$0] == nil && !asked.contains($0) }
+        for slug in others {
+            let result = Shell.run("/usr/bin/env", ["gh", "repo", "view", slug, "--json", "isPrivate", "--jq", ".isPrivate"],
+                                   mergingErrors: false, timeout: ghTimeout)
+            if result.status == 0 { map[slug] = result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true" }
         }
-        return (map, missed)
+        return (map, others)
     }
+
+    /// How long a quick question to GitHub may take before it's given up on.
+    nonisolated static let ghTimeout: TimeInterval = 30
 
     // MARK: Trash
 
@@ -523,7 +530,8 @@ final class ProjectStore: ObservableObject {
 
     /// Your repositories on GitHub, through the GitHub CLI's sign-in.
     nonisolated static func remoteRepositories() -> Result<[RemoteRepository], ProjectError> {
-        let result = Shell.run("/usr/bin/env", ["gh", "repo", "list", "--limit", "300", "--json", "nameWithOwner,isPrivate"], mergingErrors: false)
+        let result = Shell.run("/usr/bin/env", ["gh", "repo", "list", "--limit", "300", "--json", "nameWithOwner,isPrivate"],
+                               mergingErrors: false, timeout: ghTimeout)
         guard result.status == 0 else { return .failure(ProjectError(message: explain(result, tool: "gh"))) }
         return .success((try? JSONDecoder().decode([RemoteRepository].self, from: Data(result.output.utf8))) ?? [])
     }

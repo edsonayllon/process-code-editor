@@ -165,9 +165,11 @@ enum Shell {
     }
 
     /// Runs a tool to completion and returns what it printed: stdout and stderr together, or with
-    /// `mergingErrors` off, stdout alone (and stderr alone if it failed).
+    /// `mergingErrors` off, stdout alone (and stderr alone if it failed). With a `timeout`, a tool still
+    /// running after that many seconds is stopped and the result has status 124.
     @discardableResult
-    static func run(_ tool: String, _ arguments: [String], in directory: URL? = nil, mergingErrors: Bool = true) -> Result {
+    static func run(_ tool: String, _ arguments: [String], in directory: URL? = nil, mergingErrors: Bool = true,
+                    timeout: TimeInterval? = nil) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tool)
         process.arguments = arguments
@@ -179,6 +181,8 @@ enum Shell {
         process.standardError = errorPipe
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return Result(status: -1, output: error.localizedDescription) }
+        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        if let timeout { DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog) }
         // Drain both pipes at once so a chatty stderr can't block the child.
         var errorData = Data()
         let group = DispatchGroup()
@@ -192,6 +196,11 @@ enum Shell {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         group.wait()
         process.waitUntilExit()
+        watchdog.cancel()
+        if let timeout, process.terminationReason == .uncaughtSignal {
+            let name = arguments.first.map { tool.hasSuffix("/env") ? $0 : tool } ?? tool
+            return Result(status: 124, output: "\(name) didn't answer within \(Int(timeout)) seconds and was stopped.")
+        }
         let failedApart = !mergingErrors && process.terminationStatus != 0
         return Result(status: process.terminationStatus, output: String(decoding: failedApart ? errorData : data, as: UTF8.self))
     }

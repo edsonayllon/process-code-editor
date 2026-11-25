@@ -366,6 +366,14 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(ProjectStore.trashWarning(for: plainFolder), "The folder moves to the Trash, where you can put it back.")
     }
 
+    func testAHungToolIsStopped() {
+        let start = Date()
+        let result = Shell.run("/bin/sleep", ["30"], timeout: 0.5)
+        XCTAssertEqual(result.status, 124)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertEqual(Shell.run("/bin/echo", ["hi"], timeout: 5).output, "hi\n", "a quick tool is untouched")
+    }
+
     func testOnlyARepositoryHoldingNoOtherProjectGoesToTheTrash() {
         let listed = ["/r/app", "/r/app/inner", "/r/other", "/elsewhere/notes"]
         XCTAssertNil(ProjectStore.trashRefusal(for: Project(path: "/r/other"), root: "/r", listed: listed))

@@ -195,16 +195,14 @@ struct ProjectsView: View {
     /// A clone or a new repository is opened as soon as it exists.
     private func finished(_ url: URL) {
         sheet = nil
-        store.refresh()
-        store.loadPrivacy(force: true)
+        store.refresh(askGitHub: true)
         open(url)
     }
 
     /// A published repository stays in the list, now with its remote and lock.
     private func published(_ url: URL) {
         sheet = nil
-        store.refresh()
-        store.loadPrivacy(force: true)
+        store.refresh(askGitHub: true)
     }
 
     /// Reads the repository again before warning, so the warning counts what's there now.
