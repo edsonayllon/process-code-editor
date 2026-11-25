@@ -14,10 +14,12 @@ struct Project: Identifiable, Equatable {
     var changes = 0
     var ahead = 0
     var behind = 0
-    /// Whether the current branch tracks one on the remote.
-    var hasUpstream = false
     /// False for a repository with no commits yet, which GitHub can't be sent.
     var hasCommits = true
+    /// Commits on any local branch that no remote has, and stashed changes. Read only before a
+    /// move to the Trash (`inspectedForTrash`), since it costs two more git runs.
+    var unpushed = 0
+    var stashes = 0
     /// Whether git has been read yet. Until then the remote is unknown, not missing.
     var isRead = false
     var lastCommit: Date?
@@ -67,13 +69,10 @@ struct Project: Identifiable, Equatable {
         changes = 0
         ahead = 0
         behind = 0
-        hasUpstream = false
         hasCommits = true
         for line in status.split(separator: "\n") {
             if line == "# branch.oid (initial)" {
                 hasCommits = false
-            } else if line.hasPrefix("# branch.upstream ") {
-                hasUpstream = true
             } else if line.hasPrefix("# branch.head ") {
                 let head = String(line.dropFirst("# branch.head ".count))
                 branch = head == "(detached)" ? "detached" : head
@@ -108,6 +107,18 @@ struct Project: Identifiable, Equatable {
         if log.status == 0, let seconds = TimeInterval(log.output.trimmingCharacters(in: .whitespacesAndNewlines)) {
             project.lastCommit = Date(timeIntervalSince1970: seconds)
         }
+        return project
+    }
+
+    /// `inspected()`, plus what only exists in this folder: commits on any branch that no remote
+    /// has (including a branch whose upstream was deleted), and stashes. Runs off the main thread.
+    func inspectedForTrash() -> Project {
+        var project = inspected()
+        guard project.isRead else { return project }
+        let count = Shell.run("/usr/bin/env", ["git", "rev-list", "--count", "--branches", "--not", "--remotes"], in: url, mergingErrors: false)
+        project.unpushed = Int(count.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let stashes = Shell.run("/usr/bin/env", ["git", "stash", "list"], in: url, mergingErrors: false)
+        project.stashes = stashes.status == 0 ? stashes.output.split(separator: "\n").count : 0
         return project
     }
 
@@ -361,10 +372,14 @@ final class ProjectStore: ObservableObject {
             if project.changes > 0 {
                 risks.append(project.changes == 1 ? "It has 1 uncommitted change." : "It has \(project.changes) uncommitted changes.")
             }
-            if project.ahead > 0 {
-                risks.append(project.ahead == 1 ? "It has 1 commit that isn't pushed." : "It has \(project.ahead) commits that aren't pushed.")
+            if project.unpushed > 0 {
+                risks.append(project.unpushed == 1
+                             ? "It has 1 commit that isn't on GitHub, on one of its branches."
+                             : "It has \(project.unpushed) commits that aren't on GitHub, across its branches.")
             }
-            if !project.hasUpstream { risks.append("Its current branch isn't on GitHub.") }
+            if project.stashes > 0 {
+                risks.append(project.stashes == 1 ? "It has 1 stash." : "It has \(project.stashes) stashes.")
+            }
         }
         let base = project.isPublished
             ? "The folder moves to the Trash, where you can put it back. The repository on GitHub isn't touched."
@@ -377,8 +392,11 @@ final class ProjectStore: ObservableObject {
     nonisolated static func trashRefusal(for project: Project, root: String, listed: [String]) -> String? {
         let path = (project.path as NSString).standardizingPath
         guard project.isRepository else { return "Only a git repository can be moved to the Trash from here." }
-        guard path != (root as NSString).standardizingPath, path != "/", path != NSHomeDirectory() else {
-            return "That's the projects folder itself."
+        // Never the projects folder or the home folder, or anything holding either of them.
+        let root = (root as NSString).standardizingPath
+        for (kept, name) in [(root, "projects"), (NSHomeDirectory(), "home")] {
+            if kept == path { return "That's the \(name) folder itself." }
+            if path == "/" || kept.hasPrefix(path + "/") { return "It holds the \(name) folder." }
         }
         if let inside = listed.first(where: { ($0 as NSString).standardizingPath.hasPrefix(path + "/") }) {
             return "It holds another project, “\((inside as NSString).lastPathComponent)”."

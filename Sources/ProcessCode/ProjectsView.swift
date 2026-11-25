@@ -110,7 +110,13 @@ struct ProjectsView: View {
             isPresented: Binding(get: { pendingTrash != nil }, set: { if !$0 { pendingTrash = nil } }),
             presenting: pendingTrash
         ) { project in
-            Button("Move to Trash", role: .destructive) { trashError = store.moveToTrash(project) }
+            Button("Move to Trash", role: .destructive) {
+                // A second alert put up while this one is still going away can be dropped, so the
+                // error waits until it has gone.
+                if let error = store.moveToTrash(project) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { trashError = error }
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: { project in
             Text(ProjectStore.trashWarning(for: project))
@@ -204,7 +210,7 @@ struct ProjectsView: View {
     /// Reads the repository again before warning, so the warning counts what's there now.
     private func confirmTrash(_ project: Project) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let fresh = project.inspected()
+            let fresh = project.inspectedForTrash()
             DispatchQueue.main.async { pendingTrash = fresh }
         }
     }

@@ -323,12 +323,10 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(project.ahead, 2)
         XCTAssertEqual(project.behind, 1)
         XCTAssertEqual(project.changes, 2)
-        XCTAssertTrue(project.hasUpstream)
         XCTAssertTrue(project.hasCommits)
         project.read(status: "# branch.oid (initial)\n# branch.head (detached)\n")
         XCTAssertEqual(project.branch, "detached")
         XCTAssertEqual(project.changes, 0)
-        XCTAssertFalse(project.hasUpstream)
         XCTAssertFalse(project.hasCommits)
     }
 
@@ -351,19 +349,18 @@ final class ProjectTests: XCTestCase {
         XCTAssertTrue(ProjectStore.trashWarning(for: local).hasPrefix("It isn't on GitHub"))
         XCTAssertFalse(ProjectStore.trashWarning(for: local).contains("GitHub isn't touched"))
 
-        var safe = Project(path: "/r/safe", remote: "git@github.com:o/safe.git")
-        safe.hasUpstream = true
+        let safe = Project(path: "/r/safe", remote: "git@github.com:o/safe.git")
         XCTAssertEqual(ProjectStore.trashWarning(for: safe),
                        "The folder moves to the Trash, where you can put it back. The repository on GitHub isn't touched.")
 
         var risky = safe
         risky.changes = 3
-        risky.ahead = 1
-        risky.hasUpstream = false
+        risky.unpushed = 1
+        risky.stashes = 2
         let warning = ProjectStore.trashWarning(for: risky)
         XCTAssertTrue(warning.contains("3 uncommitted changes"))
-        XCTAssertTrue(warning.contains("1 commit that isn't pushed"))
-        XCTAssertTrue(warning.contains("branch isn't on GitHub"))
+        XCTAssertTrue(warning.contains("1 commit that isn't on GitHub"))
+        XCTAssertTrue(warning.contains("2 stashes"))
 
         let plainFolder = Project(path: "/r/notes", isRepository: false)
         XCTAssertEqual(ProjectStore.trashWarning(for: plainFolder), "The folder moves to the Trash, where you can put it back.")
@@ -378,6 +375,44 @@ final class ProjectTests: XCTestCase {
         XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/r/"), root: "/r", listed: listed), "the projects folder itself")
         XCTAssertNil(ProjectStore.trashRefusal(for: Project(path: "/r/app-2"), root: "/r", listed: listed + ["/r/app-2x"]),
                      "a sibling whose name starts the same isn't inside it")
+        XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/Users/me/Documents"), root: "/Users/me/Documents/GitHub", listed: []),
+                        "a folder above the projects folder, even with nothing listed inside it")
+        XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: NSHomeDirectory()), root: "/r", listed: []))
+        XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/"), root: "/r", listed: []))
+    }
+
+    /// Work that only exists in the folder: a branch never pushed, a branch whose upstream was
+    /// deleted, and a stash, all while the current branch is in step with its remote.
+    func testTrashCountsWorkOnEveryBranchAndStash() throws {
+        let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let remote = base.appendingPathComponent("remote.git"), repo = base.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        func git(_ args: String..., in dir: URL) {
+            let result = Shell.run("/usr/bin/env", ["git", "-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args, in: dir)
+            XCTAssertEqual(result.status, 0, "git \(args.joined(separator: " ")): \(result.output)")
+        }
+        git("init", "--bare", "-b", "main", in: remote)
+        _ = try ProjectStore.create(name: "repo", readme: true, in: base.path).get()
+        git("remote", "add", "origin", remote.path, in: repo)
+        git("push", "-u", "origin", "main", in: repo)
+        XCTAssertEqual(Project(path: repo.path).inspectedForTrash().unpushed, 0, "everything is on the remote")
+
+        git("switch", "-c", "gone", in: repo)
+        git("commit", "--allow-empty", "-m", "pushed, then deleted on the remote", in: repo)
+        git("push", "-u", "origin", "gone", in: repo)
+        git("push", "origin", "--delete", "gone", in: repo)
+        git("switch", "-c", "local", in: repo)
+        git("commit", "--allow-empty", "-m", "never pushed", in: repo)
+        git("switch", "main", in: repo)
+        try "edit".write(to: repo.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        git("stash", in: repo)
+
+        let project = Project(path: repo.path).inspectedForTrash()
+        XCTAssertEqual(project.ahead, 0, "the current branch alone looks safe")
+        XCTAssertEqual(project.unpushed, 2)
+        XCTAssertEqual(project.stashes, 1)
+        XCTAssertTrue(ProjectStore.trashWarning(for: project).contains("2 commits that aren't on GitHub"))
     }
 
     @MainActor
