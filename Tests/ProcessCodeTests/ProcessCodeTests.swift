@@ -323,9 +323,84 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(project.ahead, 2)
         XCTAssertEqual(project.behind, 1)
         XCTAssertEqual(project.changes, 2)
+        XCTAssertTrue(project.hasUpstream)
+        XCTAssertTrue(project.hasCommits)
         project.read(status: "# branch.oid (initial)\n# branch.head (detached)\n")
         XCTAssertEqual(project.branch, "detached")
         XCTAssertEqual(project.changes, 0)
+        XCTAssertFalse(project.hasUpstream)
+        XCTAssertFalse(project.hasCommits)
+    }
+
+    func testGitHubNames() {
+        XCTAssertEqual(ProjectStore.githubName(for: "my project"), "my-project")
+        XCTAssertEqual(ProjectStore.githubName(for: " Café  & co. "), "Caf-co.")
+        XCTAssertEqual(ProjectStore.githubName(for: "already_fine-1.0"), "already_fine-1.0")
+    }
+
+    func testPublishArguments() {
+        XCTAssertEqual(ProjectStore.publishArguments(path: "/r/app", name: "app", description: " ", isPrivate: true, hasCommits: true),
+                       ["gh", "repo", "create", "app", "--private", "--source", "/r/app", "--remote", "origin", "--push"])
+        XCTAssertEqual(ProjectStore.publishArguments(path: "/r/app", name: "app", description: "A thing", isPrivate: false, hasCommits: false),
+                       ["gh", "repo", "create", "app", "--public", "--source", "/r/app", "--remote", "origin", "--description", "A thing"],
+                       "nothing to push without a commit")
+    }
+
+    func testTrashWarningNamesWhatWouldBeLost() {
+        let local = Project(path: "/r/local")
+        XCTAssertTrue(ProjectStore.trashWarning(for: local).hasPrefix("It isn't on GitHub"))
+        XCTAssertFalse(ProjectStore.trashWarning(for: local).contains("GitHub isn't touched"))
+
+        var safe = Project(path: "/r/safe", remote: "git@github.com:o/safe.git")
+        safe.hasUpstream = true
+        XCTAssertEqual(ProjectStore.trashWarning(for: safe),
+                       "The folder moves to the Trash, where you can put it back. The repository on GitHub isn't touched.")
+
+        var risky = safe
+        risky.changes = 3
+        risky.ahead = 1
+        risky.hasUpstream = false
+        let warning = ProjectStore.trashWarning(for: risky)
+        XCTAssertTrue(warning.contains("3 uncommitted changes"))
+        XCTAssertTrue(warning.contains("1 commit that isn't pushed"))
+        XCTAssertTrue(warning.contains("branch isn't on GitHub"))
+
+        let plainFolder = Project(path: "/r/notes", isRepository: false)
+        XCTAssertEqual(ProjectStore.trashWarning(for: plainFolder), "The folder moves to the Trash, where you can put it back.")
+    }
+
+    func testOnlyARepositoryHoldingNoOtherProjectGoesToTheTrash() {
+        let listed = ["/r/app", "/r/app/inner", "/r/other", "/elsewhere/notes"]
+        XCTAssertNil(ProjectStore.trashRefusal(for: Project(path: "/r/other"), root: "/r", listed: listed))
+        XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/elsewhere/notes", isRepository: false), root: "/r", listed: listed),
+                        "a plain folder opened from elsewhere is only removed from the list")
+        XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/r/app"), root: "/r", listed: listed), "it holds another project")
+        XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/r/"), root: "/r", listed: listed), "the projects folder itself")
+        XCTAssertNil(ProjectStore.trashRefusal(for: Project(path: "/r/app-2"), root: "/r", listed: listed + ["/r/app-2x"]),
+                     "a sibling whose name starts the same isn't inside it")
+    }
+
+    @MainActor
+    func testANewRepositoryCanBePublishedAndRefusalsLeaveItAlone() throws {
+        let suite = "ProcessCodeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        defaults.set(root, forKey: "projectsFolder")
+
+        let made = try ProjectStore.create(name: "fresh", readme: true, in: root).get()
+        let fresh = Project(path: made.path).inspected()
+        XCTAssertTrue(fresh.canPublish, "read, a repository, and no remote")
+        XCTAssertFalse(Project(path: made.path).canPublish, "not before git has been read")
+
+        let store = ProjectStore(defaults: defaults)
+        let inner = Project(path: made.path + "/inner", isRepository: false, isExternal: true)
+        store.projects = [fresh, inner]
+        XCTAssertNotNil(store.moveToTrash(fresh), "it holds another listed project")
+        XCTAssertNotNil(store.moveToTrash(inner), "not a repository")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: made.path))
+        XCTAssertEqual(store.projects.count, 2, "a refusal changes nothing")
     }
 
     func testRemoteFormsBecomeWebURLs() {
@@ -397,5 +472,12 @@ final class ProjectTests: XCTestCase {
         let inspected = try XCTUnwrap(found.first { $0.name == "demo" }).inspected()
         XCTAssertEqual(inspected.branch, "main")
         XCTAssertEqual(inspected.changes, 0)
+        XCTAssertTrue(inspected.hasCommits)
+        XCTAssertFalse(inspected.isPublished)
+
+        let empty = try ProjectStore.create(name: "empty", readme: false, in: root).get()
+        XCTAssertFalse(Project(path: empty.path).inspected().hasCommits)
+        XCTAssertThrowsError(try ProjectStore.publish(Project(path: created.path, remote: "x"), name: " ", description: "", isPrivate: true).get(),
+                             "a name is needed before anything runs")
     }
 }

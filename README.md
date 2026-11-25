@@ -15,8 +15,9 @@ used for in that setup, in a 4 MB app that idles around 60 MB of memory instead 
   the terminal's bar (Spotlight) turns this off and on; it's on to begin with.
 - **A projects window instead of a welcome page.** A new window lists the git repositories in your projects
   folder (`~/Documents/GitHub` unless you change it), most recently worked on first, each with its branch,
-  uncommitted changes and commits waiting to push or pull. Type to filter, Return to open. Clone one of your
-  GitHub repositories or start a new one from the same window.
+  uncommitted changes and commits waiting to push or pull, and a lock on the private ones. Type to filter,
+  Return to open. Clone one of your GitHub repositories or start a new one from the same window, publish one to
+  GitHub, or move one to the Trash.
 - **A file tree with git status**: new, modified and deleted files are coloured and lettered, and a Changes list
   shows only those. ⌘P finds a file by name.
 - **An editor** with syntax colouring for the languages in everyday use (Swift, Python, JavaScript and TypeScript,
@@ -36,8 +37,8 @@ a button that checks for a new version.
 ## Requirements
 
 - macOS 27 or later, and Xcode's command line tools to build.
-- `git` for the status colours, and the GitHub CLI to clone from your account (`brew install gh`, then
-  `gh auth login` once). For LaTeX, a TeX distribution with `latexmk` (MacTeX, or `brew install basictex`).
+- `git` for the status colours, and the GitHub CLI to clone from your account, publish to it and see which
+  repositories are private (`brew install gh`, then `gh auth login` once). For LaTeX, a TeX distribution with `latexmk` (MacTeX, or `brew install basictex`).
 
 ## Download
 
@@ -145,9 +146,18 @@ behaves like the release. Notarisation takes a few minutes and gives up after 20
 
 The list is every folder in the projects folder that is a git repository, plus any folder you opened from
 somewhere else (those can be removed from the list with a right click; nothing on disk is touched). A green dot
-marks a project that already has a window, and choosing it brings that window forward. The repository reading,
-cloning and creating come from [Lean GitHub](https://github.com/edsonayllon/lean-github-app), which remains the
-place to publish a repository, see whether it is private, or move it to the Trash.
+marks a project that already has a window, and choosing it brings that window forward. A lock marks a repository
+that is private on GitHub; the list shows first and asks GitHub afterwards, so the locks never hold it up.
+
+- **New…** starts a repository, and can publish it to your GitHub account straight away, private or public.
+- **Publish to GitHub…**, on the right click of a repository marked "not on GitHub", makes the GitHub repository,
+  sets it as `origin` and pushes.
+- **Move to Trash…** moves the folder to the Trash, where it can be put back. It never deletes anything outright
+  and never touches GitHub, and it says first what would be lost: changes not committed, commits not pushed, or
+  a repository that isn't on GitHub at all. A project with a window open can't be moved; close the window first.
+
+All of this goes through the GitHub CLI's sign-in (`gh auth login`), so the app has no login of its own. This
+replaces the separate Repo Select app.
 
 ## LaTeX
 

@@ -3,7 +3,8 @@ import Combine
 import SwiftUI
 
 /// What a new window shows: the projects on this Mac, most recently worked on first. Type to
-/// filter, Return to open. Cloning and starting a repository are one button away.
+/// filter, Return to open. Cloning and starting a repository are one button away; publishing one
+/// to GitHub and moving one to the Trash are on its right-click menu.
 struct ProjectsView: View {
     @ObservedObject var store = ProjectStore.shared
     /// Whether a folder already has a window.
@@ -11,12 +12,22 @@ struct ProjectsView: View {
     let open: (URL) -> Void
     let chooseFolder: () -> Void
 
-    enum Sheet: String, Identifiable {
+    enum Sheet: Identifiable {
         case clone, new
-        var id: String { rawValue }
+        case publish(Project)
+        var id: String {
+            switch self {
+            case .clone: return "clone"
+            case .new: return "new"
+            case .publish(let project): return "publish:" + project.path
+            }
+        }
     }
 
     @State private var sheet: Sheet?
+    /// The project waiting on the "Move to Trash?" confirmation, freshly read.
+    @State private var pendingTrash: Project?
+    @State private var trashError: String?
     @FocusState private var filterFocused: Bool
     /// Lets a launch option put a sheet up, for a picture of it.
     static let requestedSheet = PassthroughSubject<String, Never>()
@@ -86,12 +97,40 @@ struct ProjectsView: View {
             store.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in store.refresh() }
-        .onReceive(ProjectsView.requestedSheet) { sheet = Sheet(rawValue: $0) }
+        .onReceive(ProjectsView.requestedSheet, perform: showRequested)
         .sheet(item: $sheet) { kind in
             switch kind {
             case .clone: CloneSheet(store: store, finished: finished)
             case .new: NewRepositorySheet(store: store, finished: finished)
+            case .publish(let project): PublishSheet(project: project, finished: published)
             }
+        }
+        .alert(
+            "Move “\(pendingTrash?.name ?? "")” to the Trash?",
+            isPresented: Binding(get: { pendingTrash != nil }, set: { if !$0 { pendingTrash = nil } }),
+            presenting: pendingTrash
+        ) { project in
+            Button("Move to Trash", role: .destructive) { trashError = store.moveToTrash(project) }
+            Button("Cancel", role: .cancel) {}
+        } message: { project in
+            Text(ProjectStore.trashWarning(for: project))
+        }
+        .alert("Couldn't move it to the Trash",
+               isPresented: Binding(get: { trashError != nil }, set: { if !$0 { trashError = nil } }),
+               presenting: trashError) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { Text($0) }
+    }
+
+    /// A sheet asked for by a launch option, for a picture of it.
+    private func showRequested(_ name: String) {
+        switch name {
+        case "clone": sheet = .clone
+        case "new": sheet = .new
+        case "publish":
+            let list = store.visible
+            if let project = list.first(where: \.canPublish) ?? list.first { sheet = .publish(project) }
+        default: break
         }
     }
 
@@ -100,7 +139,8 @@ struct ProjectsView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(store.visible) { project in
-                        ProjectRow(project: project, selected: project.path == store.selection, isOpen: isOpen(project.path)) {
+                        ProjectRow(project: project, isPrivate: store.isPrivate(project), selected: project.path == store.selection,
+                                   isOpen: isOpen(project.path)) {
                             open(project.url)
                         }
                         .id(project.path)
@@ -113,9 +153,17 @@ struct ProjectsView: View {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(project.path, forType: .string)
                             }
+                            if project.canPublish {
+                                Button("Publish to GitHub…") { sheet = .publish(project) }
+                            }
+                            Divider()
                             if project.isExternal {
-                                Divider()
                                 Button("Remove from List") { store.forget(project) }
+                            }
+                            // Only repositories, and not one with a window: close the window first.
+                            if project.isRepository {
+                                Button("Move to Trash…") { confirmTrash(project) }
+                                    .disabled(isOpen(project.path) || store.trashRefusal(for: project) != nil)
                             }
                         }
                     }
@@ -142,13 +190,31 @@ struct ProjectsView: View {
     private func finished(_ url: URL) {
         sheet = nil
         store.refresh()
+        store.loadPrivacy(force: true)
         open(url)
+    }
+
+    /// A published repository stays in the list, now with its remote and lock.
+    private func published(_ url: URL) {
+        sheet = nil
+        store.refresh()
+        store.loadPrivacy(force: true)
+    }
+
+    /// Reads the repository again before warning, so the warning counts what's there now.
+    private func confirmTrash(_ project: Project) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fresh = project.inspected()
+            DispatchQueue.main.async { pendingTrash = fresh }
+        }
     }
 }
 
 /// One project: its name, then branch, what's uncommitted or unpushed, and how long ago it was touched.
 private struct ProjectRow: View {
     let project: Project
+    /// nil when it isn't on GitHub, or GitHub hasn't said.
+    let isPrivate: Bool?
     let selected: Bool
     let isOpen: Bool
     let action: () -> Void
@@ -161,6 +227,12 @@ private struct ProjectRow: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if isPrivate == true {
+                Image(systemName: "lock")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.tertiary)
+                    .help("Private on GitHub")
+            }
             if isOpen {
                 Circle().fill(Theme.accent).frame(width: 6, height: 6)
                     .help("Open in a window")
@@ -169,6 +241,11 @@ private struct ProjectRow: View {
                 Text("no git")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.tertiary)
+            } else if project.canPublish {
+                Text("not on GitHub")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.tertiary)
+                    .help("Publish it from the right-click menu")
             }
             if project.isExternal {
                 Text((((project.path as NSString).deletingLastPathComponent) as NSString).abbreviatingWithTildeInPath)
@@ -461,23 +538,73 @@ private struct NewRepositorySheet: View {
     let finished: (URL) -> Void
     @State private var name = ""
     @State private var readme = true
+    @State private var publish = false
+    @State private var isPrivate = true
     @FocusState private var focused: Bool
 
     var body: some View {
         let root = store.rootPath
-        let name = self.name, readme = self.readme
-        SheetFrame(title: "New repository", confirm: "Create", busyText: "Creating…",
+        let name = self.name, readme = self.readme, publish = self.publish, isPrivate = self.isPrivate
+        SheetFrame(title: "New repository", confirm: publish ? "Create and Publish" : "Create",
+                   busyText: publish ? "Creating and publishing…" : "Creating…",
                    canConfirm: !name.trimmingCharacters(in: .whitespaces).isEmpty,
-                   action: { ProjectStore.create(name: name, readme: readme, in: root) }, finished: finished) {
+                   action: { ProjectStore.create(name: name, readme: readme, publish: publish, isPrivate: isPrivate, in: root) },
+                   finished: finished) {
             TextField("", text: $name, prompt: Text("Name")).field().focused($focused)
-            Toggle("Start with a README and a first commit", isOn: $readme)
-                .font(.system(size: 13))
-            Text("Created in \((root as NSString).abbreviatingWithTildeInPath). Publish it to GitHub from Lean GitHub or with gh.")
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Start with a README and a first commit", isOn: $readme)
+                Toggle("Publish to GitHub now", isOn: $publish)
+                if publish {
+                    Toggle("Keep it private", isOn: $isPrivate)
+                        .padding(.leading, 20)
+                }
+            }
+            .font(.system(size: 13))
+            Text(publish
+                 ? "Created in \((root as NSString).abbreviatingWithTildeInPath), then published to your GitHub account as \(isPrivate ? "private" : "public")."
+                 : "Created in \((root as NSString).abbreviatingWithTildeInPath).")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(width: 420)
         .onAppear { focused = true }
+        // If it was made but publishing failed, it's on the list to publish from its menu.
+        .onDisappear { store.refresh() }
+    }
+}
+
+/// Make a GitHub repository for a local one and push it, with the GitHub CLI's sign-in.
+private struct PublishSheet: View {
+    let project: Project
+    let finished: (URL) -> Void
+    @State private var name = ""
+    @State private var description = ""
+    @State private var isPrivate = true
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let project = self.project
+        let githubName = name, about = description, makePrivate = isPrivate
+        SheetFrame(title: "Publish “\(project.name)” to GitHub", confirm: "Publish", busyText: "Publishing…",
+                   canConfirm: !githubName.trimmingCharacters(in: .whitespaces).isEmpty,
+                   action: { ProjectStore.publish(project, name: githubName, description: about, isPrivate: makePrivate) },
+                   finished: finished) {
+            TextField("", text: $name, prompt: Text("Name on GitHub")).field().focused($focused)
+            TextField("", text: $description, prompt: Text("Description (optional)")).field()
+            Toggle("Keep it private", isOn: $isPrivate)
+                .font(.system(size: 13))
+            Text(project.hasCommits
+                 ? "Makes the repository on your GitHub account, sets it as origin and pushes."
+                 : "Makes the repository on your GitHub account and sets it as origin. There are no commits to push yet.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(width: 420)
+        .onAppear {
+            if name.isEmpty { name = ProjectStore.githubName(for: project.name) }
+            focused = true
+        }
     }
 }

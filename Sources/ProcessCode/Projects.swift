@@ -2,8 +2,6 @@ import AppKit
 import Combine
 
 /// A folder that can be opened: a git repository in the projects folder, or any folder opened before.
-/// The repository reading, cloning and creating here come from the Lean GitHub app, which stays
-/// the place for publishing, privacy and moving repositories to the Trash.
 struct Project: Identifiable, Equatable {
     let path: String
     var isRepository = true
@@ -16,12 +14,23 @@ struct Project: Identifiable, Equatable {
     var changes = 0
     var ahead = 0
     var behind = 0
+    /// Whether the current branch tracks one on the remote.
+    var hasUpstream = false
+    /// False for a repository with no commits yet, which GitHub can't be sent.
+    var hasCommits = true
+    /// Whether git has been read yet. Until then the remote is unknown, not missing.
+    var isRead = false
     var lastCommit: Date?
     var lastOpened: Date?
 
     var id: String { path }
     var name: String { (path as NSString).lastPathComponent }
     var url: URL { URL(fileURLWithPath: path) }
+
+    /// Has a remote to push to, so it's somewhere besides this Mac.
+    var isPublished: Bool { remote != nil }
+    /// A repository known to have no remote: one that can be published.
+    var canPublish: Bool { isRepository && isRead && !isPublished }
 
     /// When it was last worked on: opened here or committed to, whichever is later.
     var activity: Date { max(lastOpened ?? .distantPast, lastCommit ?? .distantPast) }
@@ -58,8 +67,14 @@ struct Project: Identifiable, Equatable {
         changes = 0
         ahead = 0
         behind = 0
+        hasUpstream = false
+        hasCommits = true
         for line in status.split(separator: "\n") {
-            if line.hasPrefix("# branch.head ") {
+            if line == "# branch.oid (initial)" {
+                hasCommits = false
+            } else if line.hasPrefix("# branch.upstream ") {
+                hasUpstream = true
+            } else if line.hasPrefix("# branch.head ") {
                 let head = String(line.dropFirst("# branch.head ".count))
                 branch = head == "(detached)" ? "detached" : head
             } else if line.hasPrefix("# branch.ab ") {
@@ -87,6 +102,7 @@ struct Project: Identifiable, Equatable {
         let status = Shell.run("/usr/bin/env", ["git", "status", "--porcelain=v2", "--branch"], in: url)
         guard status.status == 0 else { return project }
         project.read(status: status.output)
+        project.isRead = true
         project.remote = Project.remote(in: Shell.run("/usr/bin/env", ["git", "remote", "-v"], in: url).output)
         let log = Shell.run("/usr/bin/env", ["git", "log", "-1", "--format=%ct"], in: url)
         if log.status == 0, let seconds = TimeInterval(log.output.trimmingCharacters(in: .whitespacesAndNewlines)) {
@@ -132,6 +148,9 @@ final class ProjectStore: ObservableObject {
     @Published var search = "" { didSet { keepSelectionVisible() } }
     @Published var selection: String?
     @Published var isLoading = false
+    /// Which GitHub repositories are private, by lowercased "owner/name". Kept between launches so the
+    /// locks show at once; GitHub is asked again after the list has been read.
+    @Published private(set) var privacy: [String: Bool]
     @Published var rootPath: String {
         didSet {
             defaults.set(rootPath, forKey: "projectsFolder")
@@ -143,11 +162,18 @@ final class ProjectStore: ObservableObject {
     private var generation = 0
     /// When each folder was last opened here, by path.
     private var opened: [String: Double]
+    private var privacyLoadedAt: Date?
+    private var privacyLoading = false
+    /// A forced load asked for while one was running, to run when it ends.
+    private var privacyAgain = false
+    /// Repositories GitHub wouldn't say anything about this session, so they aren't asked again.
+    private var privacyMissed: Set<String> = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         rootPath = defaults.string(forKey: "projectsFolder") ?? ProjectStore.defaultRoot
         opened = defaults.dictionary(forKey: "lastOpened") as? [String: Double] ?? [:]
+        privacy = defaults.dictionary(forKey: "privacy") as? [String: Bool] ?? [:]
     }
 
     /// The projects that match the filter, most recently worked on first.
@@ -259,11 +285,133 @@ final class ProjectStore: ObservableObject {
                 let dates = Dictionary(self.projects.compactMap { p in p.lastCommit.map { (p.path, $0.timeIntervalSince1970) } },
                                        uniquingKeysWith: { a, _ in a })
                 self.defaults.set(dates, forKey: "lastCommits")
+                self.loadPrivacy()
             }
         }
     }
 
-    // MARK: Clone and create
+    // MARK: Private or public
+
+    /// nil when the repository isn't on GitHub, or GitHub hasn't said yet.
+    func isPrivate(_ project: Project) -> Bool? {
+        guard project.webURL?.host == "github.com", let slug = project.slug else { return nil }
+        return privacy[slug.lowercased()]
+    }
+
+    /// Asks GitHub which repositories are private. It's the only thing here that uses the network
+    /// unasked, so it runs in the background after the list is up, at most every 15 seconds unless forced.
+    func loadPrivacy(force: Bool = false) {
+        guard !privacyLoading else {
+            if force { privacyAgain = true }
+            return
+        }
+        if !force, let last = privacyLoadedAt, Date().timeIntervalSince(last) < 15 { return }
+        privacyLoadedAt = Date()
+        privacyLoading = true
+        let slugs = Set(projects.filter { $0.webURL?.host == "github.com" }.compactMap { $0.slug?.lowercased() })
+        let skip = Set(privacy.keys).union(privacyMissed)
+        DispatchQueue.global(qos: .utility).async {
+            let answer = ProjectStore.fetchPrivacy(for: slugs, skipping: skip)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.privacyLoading = false
+                if let answer {
+                    self.privacyMissed.formUnion(answer.missed)
+                    var map = self.privacy
+                    map.merge(answer.found) { _, new in new }
+                    if map != self.privacy {
+                        self.privacy = map
+                        self.defaults.set(map, forKey: "privacy")
+                    }
+                }
+                if self.privacyAgain {
+                    self.privacyAgain = false
+                    self.loadPrivacy(force: true)
+                }
+            }
+        }
+    }
+
+    /// Your own repositories in one call, then each one owned by someone else that isn't known yet,
+    /// on its own. nil when gh can't answer at all (not installed, or not signed in).
+    nonisolated static func fetchPrivacy(for slugs: Set<String>, skipping known: Set<String>) -> (found: [String: Bool], missed: Set<String>)? {
+        guard case .success(let remotes) = remoteRepositories() else { return nil }
+        var map: [String: Bool] = [:]
+        var missed: Set<String> = []
+        for remote in remotes { map[remote.nameWithOwner.lowercased()] = remote.isPrivate }
+        for slug in slugs where map[slug] == nil && !known.contains(slug) {
+            let result = Shell.run("/usr/bin/env", ["gh", "repo", "view", slug, "--json", "isPrivate", "--jq", ".isPrivate"], mergingErrors: false)
+            if result.status == 0 {
+                map[slug] = result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+            } else {
+                missed.insert(slug)
+            }
+        }
+        return (map, missed)
+    }
+
+    // MARK: Trash
+
+    /// What would be lost, spelled out for the confirmation.
+    nonisolated static func trashWarning(for project: Project) -> String {
+        var risks: [String] = []
+        if project.isRepository && !project.isPublished {
+            risks.append("It isn't on GitHub, so the Trash will hold the only copy.")
+        } else if project.isRepository {
+            if project.changes > 0 {
+                risks.append(project.changes == 1 ? "It has 1 uncommitted change." : "It has \(project.changes) uncommitted changes.")
+            }
+            if project.ahead > 0 {
+                risks.append(project.ahead == 1 ? "It has 1 commit that isn't pushed." : "It has \(project.ahead) commits that aren't pushed.")
+            }
+            if !project.hasUpstream { risks.append("Its current branch isn't on GitHub.") }
+        }
+        let base = project.isPublished
+            ? "The folder moves to the Trash, where you can put it back. The repository on GitHub isn't touched."
+            : "The folder moves to the Trash, where you can put it back."
+        return (risks + [base]).joined(separator: "\n\n")
+    }
+
+    /// Why a folder can't go to the Trash from here, or nil if it can. Only repositories go, and
+    /// never the projects folder itself or a folder holding another project on the list.
+    nonisolated static func trashRefusal(for project: Project, root: String, listed: [String]) -> String? {
+        let path = (project.path as NSString).standardizingPath
+        guard project.isRepository else { return "Only a git repository can be moved to the Trash from here." }
+        guard path != (root as NSString).standardizingPath, path != "/", path != NSHomeDirectory() else {
+            return "That's the projects folder itself."
+        }
+        if let inside = listed.first(where: { ($0 as NSString).standardizingPath.hasPrefix(path + "/") }) {
+            return "It holds another project, “\((inside as NSString).lastPathComponent)”."
+        }
+        return nil
+    }
+
+    /// Why this project can't go to the Trash, given what's on the list now.
+    func trashRefusal(for project: Project) -> String? {
+        ProjectStore.trashRefusal(for: project, root: rootPath, listed: projects.map(\.path))
+    }
+
+    /// Moves the folder to the Trash and takes it off the list. Never deletes outright, and never
+    /// touches GitHub. Returns why it couldn't, if it couldn't.
+    func moveToTrash(_ project: Project) -> String? {
+        if let refusal = trashRefusal(for: project) { return refusal }
+        do {
+            try FileManager.default.trashItem(at: project.url, resultingItemURL: nil)
+        } catch {
+            return error.localizedDescription
+        }
+        let list = visible
+        if selection == project.path, let index = list.firstIndex(where: { $0.path == project.path }) {
+            selection = (index + 1 < list.count ? list[index + 1] : (index > 0 ? list[index - 1] : nil))?.path
+        }
+        opened[project.path] = nil
+        defaults.set(opened, forKey: "lastOpened")
+        projects.removeAll { $0.path == project.path }
+        keepSelectionVisible()
+        return nil
+    }
+
+    // MARK: Clone, create and publish
 
     /// The folder name a clone of `source` gets ("owner/name", or any git URL).
     nonisolated static func cloneName(for source: String) -> String {
@@ -291,8 +439,10 @@ final class ProjectStore: ObservableObject {
         return .success(URL(fileURLWithPath: path))
     }
 
-    /// Makes a new repository in the projects folder, with a first commit if it gets a README.
-    nonisolated static func create(name rawName: String, readme: Bool, in root: String) -> Result<URL, ProjectError> {
+    /// Makes a new repository in the projects folder, with a first commit if it gets a README, and
+    /// publishes it to GitHub if asked.
+    nonisolated static func create(name rawName: String, readme: Bool, publish: Bool = false, isPrivate: Bool = true,
+                                   in root: String) -> Result<URL, ProjectError> {
         let name = rawName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !name.contains("/"), !name.hasPrefix(".") else {
             return .failure(ProjectError(message: "A name can't be empty, start with a dot or contain a slash."))
@@ -314,7 +464,43 @@ final class ProjectStore: ObservableObject {
             Shell.run("/usr/bin/env", ["git", "add", "-A"], in: url)
             Shell.run("/usr/bin/env", ["git", "commit", "-m", "Initial commit"], in: url)
         }
-        return .success(url)
+        guard publish else { return .success(url) }
+        switch ProjectStore.publish(Project(path: path), name: githubName(for: name), description: "", isPrivate: isPrivate) {
+        case .success: return .success(url)
+        case .failure(let failure):
+            return .failure(ProjectError(message: "“\(name)” was created, but publishing it failed: \(failure.message)\n\nPublish it from its right-click menu in Projects."))
+        }
+    }
+
+    /// A folder name made into one GitHub accepts: anything besides letters, digits, ".", "_" and "-"
+    /// becomes a dash.
+    nonisolated static func githubName(for name: String) -> String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        let mapped = name.trimmingCharacters(in: .whitespaces).unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
+        return mapped.replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+    }
+
+    /// The `gh` arguments that make the GitHub repository, point origin at it and, if there's
+    /// anything to send, push.
+    nonisolated static func publishArguments(path: String, name: String, description: String, isPrivate: Bool, hasCommits: Bool) -> [String] {
+        var arguments = ["gh", "repo", "create", name, isPrivate ? "--private" : "--public", "--source", path, "--remote", "origin"]
+        let description = description.trimmingCharacters(in: .whitespaces)
+        if !description.isEmpty { arguments += ["--description", description] }
+        // gh can't push a repository that has no commits yet.
+        if hasCommits { arguments.append("--push") }
+        return arguments
+    }
+
+    /// Makes a GitHub repository for a local one and pushes it. Runs off the main thread.
+    nonisolated static func publish(_ project: Project, name rawName: String, description: String, isPrivate: Bool) -> Result<URL, ProjectError> {
+        let name = rawName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return .failure(ProjectError(message: "The repository needs a name on GitHub.")) }
+        let fresh = project.inspected()
+        guard !fresh.isPublished else { return .failure(ProjectError(message: "This repository already has a remote.")) }
+        let arguments = publishArguments(path: project.path, name: name, description: description, isPrivate: isPrivate, hasCommits: fresh.hasCommits)
+        let result = Shell.run("/usr/bin/env", arguments, in: project.url)
+        guard result.status == 0 else { return .failure(ProjectError(message: explain(result, tool: "gh"))) }
+        return .success(project.url)
     }
 
     /// Your repositories on GitHub, through the GitHub CLI's sign-in.
