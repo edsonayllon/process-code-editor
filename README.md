@@ -82,7 +82,8 @@ git switch main
 ```
 
 Releases are cut on this Mac from the `release` branch with [semantic-release](https://semantic-release.gitbook.io), not in
-GitHub Actions, because signing and notarising need the Mac's keychain. The commit messages since the last tag
+GitHub Actions, because signing and notarising need the Mac's keychain. `scripts/release.sh` refuses to run on any
+other branch or in CI. The commit messages since the last tag
 decide the version: a `fix:` makes a patch, a `feat:` a minor and a breaking change a major; with only `docs:`,
 `chore:` and the like there is nothing to release. It needs Node 24.10 or later and a logged-in GitHub CLI.
 Work lands on `main` and reaches `release` only through a pull request from `main`; `release` has to be clean

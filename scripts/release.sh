@@ -13,6 +13,12 @@ case "${1:-}" in
   *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
 esac
 
+# Only on this Mac: the signing identity, notary profile and Sparkle key live in its keychain, and releases
+# never run in GitHub Actions or any other CI.
+if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+  echo "Releases are cut on the Mac that holds the signing keys, not in CI." >&2; exit 1
+fi
+
 # The tag has to name a commit that is on GitHub and holds exactly what was built.
 if [ "$(git rev-parse --abbrev-ref HEAD)" != "release" ]; then
   echo "Releases are cut from release; this is $(git rev-parse --abbrev-ref HEAD)." >&2; exit 1
