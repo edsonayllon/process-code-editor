@@ -529,8 +529,12 @@ final class ProjectStore: ObservableObject {
         guard remoteAdded else {
             return "Publishing failed: \(output)\n\nPublish it again from its right-click menu in Projects."
         }
-        return "GitHub made the repository and set it as origin, but the push didn't finish: \(output)\n\n"
-            + "Push it from the terminal: git push -u origin \(branch ?? "main")"
+        let intro = "GitHub made the repository and set it as origin, but the push didn't finish: \(output)\n\n"
+        // read(status:) names a detached HEAD "detached"; there's no branch to push until one is made.
+        guard let branch, branch != "detached" else {
+            return intro + "You're not on a branch. Make one and push it from the terminal: git switch -c main && git push -u origin main"
+        }
+        return intro + "Push it from the terminal: git push -u origin \(branch)"
     }
 
     /// The `gh` arguments that make the GitHub repository, point origin at it and, if there's

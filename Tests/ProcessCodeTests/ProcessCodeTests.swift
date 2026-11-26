@@ -365,6 +365,9 @@ final class ProjectTests: XCTestCase {
         let halfway = ProjectStore.publishFailure("rejected", remoteAdded: true, branch: "trunk")
         XCTAssertTrue(halfway.contains("git push -u origin trunk"))
         XCTAssertFalse(halfway.contains("right-click"), "publishing again would be refused")
+        let detached = ProjectStore.publishFailure("rejected", remoteAdded: true, branch: "detached")
+        XCTAssertFalse(detached.contains("origin detached"))
+        XCTAssertTrue(detached.contains("git switch -c main"))
         let nothing = ProjectStore.publishFailure("not signed in", remoteAdded: false, branch: "main")
         XCTAssertTrue(nothing.contains("right-click menu"))
     }
