@@ -640,7 +640,8 @@ private struct TerminalPanel: View {
         .background(Theme.background)
         .overlay(alignment: .top) {
             if let resize {
-                SplitHandle(resize: resize)
+                // It covers the top of the bar, so it passes on the bar's double-click.
+                SplitHandle(resize: resize, doubleClick: { if !workspace.documents.isEmpty { workspace.toggleTerminalMaximized() } })
                     .frame(height: SplitHandle.height)
                     .offset(y: -SplitHandle.height / 2)
             }
@@ -809,15 +810,22 @@ struct SplitHandle: NSViewRepresentable {
     static let height: CGFloat = 10
 
     let resize: (Drag) -> Void
+    /// What a double-click on the bar under the handle does.
+    var doubleClick: () -> Void = {}
 
     final class HandleView: NSView {
         var resize: (Drag) -> Void = { _ in }
+        var doubleClick: () -> Void = {}
         private var startY: CGFloat?
 
         /// The first click into an inactive window grabs the line too.
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                doubleClick()
+                return
+            }
             startY = event.locationInWindow.y
             resize(.began)
         }
@@ -840,5 +848,8 @@ struct SplitHandle: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> HandleView { HandleView() }
-    func updateNSView(_ view: HandleView, context: Context) { view.resize = resize }
+    func updateNSView(_ view: HandleView, context: Context) {
+        view.resize = resize
+        view.doubleClick = doubleClick
+    }
 }
