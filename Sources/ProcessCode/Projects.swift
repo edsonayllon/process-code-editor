@@ -183,7 +183,14 @@ struct RemoteRepository: Identifiable, Equatable, Decodable {
 
 struct ProjectError: LocalizedError {
     let message: String
+    /// Set when the GitHub CLI can't be used at all, rather than one thing having failed.
+    var setup: GitHubSetup? = nil
     var errorDescription: String? { message }
+}
+
+/// Why the GitHub CLI can't be used, for the note in the projects window.
+enum GitHubSetup: Equatable {
+    case notInstalled, signedOut
 }
 
 /// The list of projects on this Mac, shown when no folder is open.
@@ -199,6 +206,21 @@ final class ProjectStore: ObservableObject {
     /// Which GitHub repositories are private, by lowercased "owner/name". Kept between launches so the
     /// locks show at once; GitHub is asked again after the list has been read.
     @Published private(set) var privacy: [String: Bool]
+    /// Why the GitHub CLI can't be used, as last found, or nil if it can (or nothing's known yet).
+    @Published var githubSetup: GitHubSetup?
+    /// Where installing the CLI or signing in to it has got to.
+    @Published var setupStep = GitHubSetupStep.idle
+    /// The `gh auth login` under way, and whether it was cancelled.
+    var signIn: Process?
+    var signInCancelled = false
+    /// Opens a page in the browser, and puts text on the clipboard. Tests watch them instead.
+    var openPage: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var copyText: (String) -> Void = { text in
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+    /// The note about it was closed, and isn't shown again.
+    @Published var githubNoticeDismissed: Bool { didSet { defaults.set(githubNoticeDismissed, forKey: "githubNoticeDismissed") } }
     @Published var rootPath: String {
         didSet {
             defaults.set(rootPath, forKey: "projectsFolder")
@@ -225,6 +247,7 @@ final class ProjectStore: ObservableObject {
         rootPath = defaults.string(forKey: "projectsFolder") ?? ProjectStore.defaultRoot
         opened = defaults.dictionary(forKey: "lastOpened") as? [String: Double] ?? [:]
         privacy = defaults.dictionary(forKey: "privacy") as? [String: Bool] ?? [:]
+        githubNoticeDismissed = defaults.bool(forKey: "githubNoticeDismissed")
     }
 
     /// The projects that match the filter, most recently worked on first.
@@ -314,7 +337,13 @@ final class ProjectStore: ObservableObject {
         keepSelectionVisible()
 
         let queue = projects
-        guard !queue.isEmpty else { isLoading = false; return }
+        guard !queue.isEmpty else {
+            isLoading = false
+            // Nothing to put locks on, but whether the GitHub CLI works is still worth knowing.
+            loadPrivacy(force: privacyDue)
+            privacyDue = false
+            return
+        }
         isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
             let lock = NSLock()
@@ -369,7 +398,12 @@ final class ProjectStore: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.privacyLoading = false
-                if let answer {
+                switch answer {
+                case .failure(let failure):
+                    // A slow network says nothing about whether the CLI is set up, so it changes nothing.
+                    if let setup = failure.setup { self.githubSetup = setup }
+                case .success(let answer):
+                    if self.githubSetup != nil { self.githubSetup = nil }
                     self.privacyAsked.formUnion(answer.asked)
                     var map = self.privacy
                     map.merge(answer.found) { _, new in new }
@@ -387,10 +421,15 @@ final class ProjectStore: ObservableObject {
     }
 
     /// Your own repositories in one call, then each one owned by someone else that hasn't been asked
-    /// about yet, on its own. nil when gh can't answer at all (not installed, not signed in, or no
-    /// answer within the time limit).
-    nonisolated static func fetchPrivacy(for slugs: Set<String>, skipping asked: Set<String>) -> (found: [String: Bool], asked: Set<String>)? {
-        guard case .success(let remotes) = remoteRepositories() else { return nil }
+    /// about yet, on its own. A failure when gh can't answer at all (not installed, not signed in, or
+    /// no answer within the time limit).
+    nonisolated static func fetchPrivacy(for slugs: Set<String>, skipping asked: Set<String>)
+        -> Result<(found: [String: Bool], asked: Set<String>), ProjectError> {
+        let remotes: [RemoteRepository]
+        switch remoteRepositories() {
+        case .success(let list): remotes = list
+        case .failure(let failure): return .failure(failure)
+        }
         var map: [String: Bool] = [:]
         for remote in remotes { map[remote.nameWithOwner.lowercased()] = remote.isPrivate }
         let others = Array(slugs.filter { map[$0] == nil && !asked.contains($0) })
@@ -406,7 +445,7 @@ final class ProjectStore: ObservableObject {
             lock.withLock { answers[index] = isPrivate }
         }
         for (slug, answer) in zip(others, answers) { if let answer { map[slug] = answer } }
-        return (map, Set(others))
+        return .success((map, Set(others)))
     }
 
     /// How long a quick question to GitHub may take before it's given up on.
@@ -415,8 +454,13 @@ final class ProjectStore: ObservableObject {
     // MARK: Trash
 
     /// What would be lost, spelled out for the confirmation.
-    nonisolated static func trashWarning(for project: Project) -> String {
+    /// `drafts` is how many of its files have unsaved changes kept from a window that closed.
+    nonisolated static func trashWarning(for project: Project, drafts: Int = 0) -> String {
         var risks: [String] = []
+        if drafts > 0 {
+            risks.append(drafts == 1 ? "1 file in it has unsaved changes, kept from when its window closed. They'll be lost."
+                         : "\(drafts) files in it have unsaved changes, kept from when its window closed. They'll be lost.")
+        }
         if project.isRepository && !project.isPublished {
             risks.append("It isn't on GitHub, so the Trash will hold the only copy.")
         } else if project.isRepository {
@@ -516,7 +560,9 @@ final class ProjectStore: ObservableObject {
         let result = isURL
             ? Shell.run("/usr/bin/env", ["git", "clone", source, path])
             : Shell.run("/usr/bin/env", ["gh", "repo", "clone", source, path])
-        guard result.status == 0 else { return .failure(ProjectError(message: explain(result, tool: isURL ? "git" : "gh"))) }
+        guard result.status == 0 else {
+            return .failure(ProjectError(message: explain(result, tool: isURL ? "git" : "gh"), setup: isURL ? nil : githubSetup(from: result)))
+        }
         return .success(URL(fileURLWithPath: path))
     }
 
@@ -549,7 +595,7 @@ final class ProjectStore: ObservableObject {
         switch ProjectStore.publish(Project(path: path), name: name, description: "", isPrivate: isPrivate) {
         case .success: return .success(url)
         case .failure(let failure):
-            return .failure(ProjectError(message: "“\(name)” was created on this Mac. \(failure.message)"))
+            return .failure(ProjectError(message: "“\(name)” was created on this Mac. \(failure.message)", setup: failure.setup))
         }
     }
 
@@ -618,7 +664,8 @@ final class ProjectStore: ObservableObject {
             let after = project.inspected()
             let made = after.isPublished ? nil : gitHubRepository(named: name)
             return .failure(ProjectError(message: publishFailure(explain(result, tool: "gh"), remoteAdded: after.isPublished,
-                                                                 madeAt: made, branch: after.branch)))
+                                                                 madeAt: made, branch: after.branch),
+                                         setup: githubSetup(from: result)))
         }
         return .success(project.url)
     }
@@ -627,17 +674,54 @@ final class ProjectStore: ObservableObject {
     nonisolated static func remoteRepositories() -> Result<[RemoteRepository], ProjectError> {
         let result = Shell.run("/usr/bin/env", ["gh", "repo", "list", "--limit", "300", "--json", "nameWithOwner,isPrivate"],
                                mergingErrors: false, timeout: ghTimeout)
-        guard result.status == 0 else { return .failure(ProjectError(message: explain(result, tool: "gh"))) }
+        guard result.status == 0 else { return .failure(ProjectError(message: explain(result, tool: "gh"), setup: githubSetup(from: result))) }
         return .success((try? JSONDecoder().decode([RemoteRepository].self, from: Data(result.output.utf8))) ?? [])
     }
 
-    private nonisolated static func explain(_ result: Shell.Result, tool: String) -> String {
-        if result.status == 127 || result.output.contains("No such file or directory") && result.output.contains("env:") {
+    nonisolated static func isMissingTool(_ result: Shell.Result) -> Bool {
+        result.status == 127 || result.output.contains("No such file or directory") && result.output.contains("env:")
+    }
+
+    /// Whether a failed gh command means the CLI isn't installed or isn't signed in.
+    nonisolated static func githubSetup(from result: Shell.Result) -> GitHubSetup? {
+        if isMissingTool(result) { return .notInstalled }
+        let text = result.output.lowercased()
+        return text.contains("gh auth login") || text.contains("not logged in") ? .signedOut : nil
+    }
+
+    /// What a failed git or gh command said, and what to do next when that's clear from it.
+    nonisolated static func explain(_ result: Shell.Result, tool: String) -> String {
+        if isMissingTool(result) {
             return tool == "gh"
                 ? "The GitHub CLI isn't installed. Install it with Homebrew (brew install gh), then run: gh auth login"
                 : "git isn't installed. Install it with Homebrew: brew install git"
         }
         let text = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "\(tool) failed." : text
+        let said = text.isEmpty ? "\(tool) stopped without saying why." : text
+        guard let step = nextStep(after: text, status: result.status) else { return said }
+        return said + "\n\n" + step
+    }
+
+    /// The way out of the failures git and gh commonly report, or nil for anything else.
+    nonisolated static func nextStep(after output: String, status: Int32) -> String? {
+        let text = output.lowercased()
+        if text.contains("gh auth login") || text.contains("not logged in") || text.contains("bad credentials")
+            || text.contains("authentication failed") {
+            return "The GitHub CLI isn't signed in, or its sign-in has expired. Run gh auth login in a terminal, then try again."
+        }
+        if status == 124 || text.contains("could not resolve host") || text.contains("error connecting to")
+            || text.contains("network is unreachable") || text.contains("timed out") {
+            return "GitHub couldn't be reached. Check the internet connection, then try again."
+        }
+        if text.contains("name already exists") {
+            return "You already have a repository with this name on GitHub. Choose another name, or rename that one on GitHub first."
+        }
+        if text.contains("could not resolve to a repository") || text.contains("repository not found") {
+            return "Check the owner and the name. A private repository shows only to an account that can see it: gh auth status says which account the GitHub CLI is using."
+        }
+        if text.contains("permission denied (publickey)") {
+            return "Git couldn't sign in to GitHub over SSH. Use the repository's HTTPS address instead, or add an SSH key to your GitHub account."
+        }
+        return nil
     }
 }
