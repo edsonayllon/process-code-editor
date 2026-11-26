@@ -25,9 +25,6 @@ struct ProjectsView: View {
     }
 
     @State private var sheet: Sheet?
-    /// The project waiting on the "Move to Trash?" confirmation, freshly read.
-    @State private var pendingTrash: Project?
-    @State private var trashError: String?
     @FocusState private var filterFocused: Bool
     /// Lets a launch option put a sheet up, for a picture of it.
     static let requestedSheet = PassthroughSubject<String, Never>()
@@ -105,27 +102,6 @@ struct ProjectsView: View {
             case .publish(let project): PublishSheet(project: project, finished: published, failed: { store.refresh() })
             }
         }
-        .alert(
-            "Move “\(pendingTrash?.name ?? "")” to the Trash?",
-            isPresented: Binding(get: { pendingTrash != nil }, set: { if !$0 { pendingTrash = nil } }),
-            presenting: pendingTrash
-        ) { project in
-            Button("Move to Trash", role: .destructive) {
-                // A second alert put up while this one is still going away can be dropped, so the
-                // error waits until it has gone.
-                if let error = store.moveToTrash(project) {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { trashError = error }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { project in
-            Text(ProjectStore.trashWarning(for: project))
-        }
-        .alert("Couldn't move it to the Trash",
-               isPresented: Binding(get: { trashError != nil }, set: { if !$0 { trashError = nil } }),
-               presenting: trashError) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { Text($0) }
     }
 
     /// A sheet asked for by a launch option, for a picture of it. Publish waits until git has read
@@ -214,12 +190,32 @@ struct ProjectsView: View {
         store.refresh(askGitHub: true)
     }
 
-    /// Reads the repository again before warning, so the warning counts what's there now.
+    /// Reads the repository again before warning, so the warning counts what's there now. The
+    /// question and any error are dialogs run one after the other, so the error can't be lost
+    /// while the question is still closing.
     private func confirmTrash(_ project: Project) {
         DispatchQueue.global(qos: .userInitiated).async {
             let fresh = project.inspectedForTrash()
-            DispatchQueue.main.async { pendingTrash = fresh }
+            DispatchQueue.main.async {
+                store.trash(fresh, confirm: ProjectsView.confirmTrash, report: ProjectsView.reportTrashFailure)
+            }
         }
+    }
+
+    private static func confirmTrash(_ project: Project) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Move “\(project.name)” to the Trash?"
+        alert.informativeText = ProjectStore.trashWarning(for: project)
+        alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private static func reportTrashFailure(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't move it to the Trash"
+        alert.informativeText = message
+        alert.runModal()
     }
 }
 

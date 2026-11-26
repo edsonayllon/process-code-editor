@@ -485,6 +485,13 @@ final class ProjectStore: ObservableObject {
         return nil
     }
 
+    /// Asks, then moves it to the Trash. A failure is reported after the question has closed, so
+    /// the two dialogs never overlap.
+    func trash(_ project: Project, confirm: (Project) -> Bool, report: (String) -> Void) {
+        guard confirm(project) else { return }
+        if let error = moveToTrash(project) { report(error) }
+    }
+
     // MARK: Clone, create and publish
 
     /// The folder name a clone of `source` gets ("owner/name", or any git URL).

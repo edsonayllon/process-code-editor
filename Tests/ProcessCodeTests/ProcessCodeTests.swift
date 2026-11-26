@@ -535,6 +535,25 @@ final class ProjectTests: XCTestCase {
         XCTAssertNotNil(store.moveToTrash(inner), "not a repository")
         XCTAssertTrue(FileManager.default.fileExists(atPath: made.path))
         XCTAssertEqual(store.projects.count, 2, "a refusal changes nothing")
+
+        var reports: [String] = []
+        store.trash(inner, confirm: { _ in false }, report: { reports.append($0) })
+        XCTAssertEqual(reports, [], "cancelled: nothing moves and nothing is reported")
+        var asked = false
+        store.trash(inner, confirm: { _ in
+            asked = true
+            XCTAssertEqual(reports, [], "the error doesn't come while the question is up")
+            return true
+        }, report: { reports.append($0) })
+        XCTAssertTrue(asked)
+        XCTAssertEqual(reports.count, 1, "the refusal is reported after the question")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: made.path))
+    }
+
+    func testGoneBranchesAreReadFromPrune() {
+        let output = "Pruning origin\nURL: git@github.com:o/r.git\n * [would prune] origin/feature/x\n * [would prune] origin/old\n"
+        XCTAssertEqual(Project.goneBranches(inPruneOutput: output), ["origin/feature/x", "origin/old"])
+        XCTAssertEqual(Project.goneBranches(inPruneOutput: "Pruning origin\nURL: ../r.git\n"), [])
     }
 
     func testRemoteFormsBecomeWebURLs() {
