@@ -7,6 +7,8 @@ struct WorkspaceView: View {
     @ObservedObject private var settings = Settings.shared
     /// The terminal's share of the height when a drag on its bar began.
     @State private var dragStartFraction: CGFloat = 0
+    /// The sidebar's width when a drag on the line beside it began.
+    @State private var dragStartWidth: CGFloat = 0
 
     var body: some View {
         GeometryReader { window in
@@ -14,9 +16,7 @@ struct WorkspaceView: View {
                 if workspace.sidebarVisible {
                     SidebarView(workspace: workspace)
                         .frame(width: workspace.sidebarWidth)
-                    Divider1(axis: .vertical, onDrag: { x in
-                        workspace.sidebarWidth = min(max(x - window.frame(in: .global).minX, 200), min(480, window.size.width - 320))
-                    }, onEnd: workspace.saveState)
+                    Divider1(axis: .vertical)
                 }
                 VStack(spacing: 0) {
                     // In full screen the top bar is in the window's title bar strip instead.
@@ -25,6 +25,22 @@ struct WorkspaceView: View {
                         Divider1(axis: .horizontal).fadesInFocusMode(workspace)
                     }
                     panes
+                }
+            }
+            // The handle for the sidebar's line is laid over everything, so the sidebar and editor on
+            // each side of it can't take the pointer.
+            .overlay(alignment: .leading) {
+                if workspace.sidebarVisible {
+                    SplitHandle(axis: .vertical) { phase in
+                        switch phase {
+                        case .began: dragStartWidth = workspace.sidebarWidth
+                        case .moved(let right):
+                            workspace.sidebarWidth = min(max(dragStartWidth + right, 200), min(480, window.size.width - 320))
+                        case .ended: workspace.saveState()
+                        }
+                    }
+                    .frame(width: SplitHandle.thickness)
+                    .offset(x: workspace.sidebarWidth + 0.5 - SplitHandle.thickness / 2)
                 }
             }
         }
@@ -642,8 +658,8 @@ private struct TerminalPanel: View {
             if let resize {
                 // It covers the top of the bar, so it passes on the bar's double-click.
                 SplitHandle(resize: resize, doubleClick: { if !workspace.documents.isEmpty { workspace.toggleTerminalMaximized() } })
-                    .frame(height: SplitHandle.height)
-                    .offset(y: -SplitHandle.height / 2)
+                    .frame(height: SplitHandle.thickness)
+                    .offset(y: -SplitHandle.thickness / 2)
             }
         }
     }
@@ -795,61 +811,70 @@ private struct BarDoubleClick: NSViewRepresentable {
     func updateNSView(_ view: ClickView, context: Context) { view.action = action }
 }
 
-/// The grab area for the line between editor and terminal: a strip laid over the line, half over
-/// the editor and half over the terminal's bar. It's an AppKit view so that it, and not the text
-/// and scroll views on either side, gets the pointer.
+/// The grab area for a line between panes that resizes them: a strip laid over the line, half on
+/// each side. It's an AppKit view so that it, and not the text and scroll views on either side,
+/// gets the pointer.
 struct SplitHandle: NSViewRepresentable {
     enum Drag {
         case began
-        /// How far the pointer has moved down since the drag began, in points.
+        /// How far the pointer has moved since the drag began, in points: down for a horizontal
+        /// line, right for a vertical one.
         case moved(CGFloat)
         case ended
     }
 
-    /// How tall the grab area is.
-    static let height: CGFloat = 10
+    /// How wide the grab area is, across the line.
+    static let thickness: CGFloat = 10
 
+    /// `.horizontal` is the line between editor and terminal, `.vertical` the one beside the sidebar.
+    var axis: Divider1.Axis = .horizontal
     let resize: (Drag) -> Void
-    /// What a double-click on the bar under the handle's lower half does.
+    /// What a double-click on the lower half of a horizontal line's handle does (over the terminal's bar).
     var doubleClick: () -> Void = {}
 
     final class HandleView: NSView {
+        var axis: Divider1.Axis = .horizontal
         var resize: (Drag) -> Void = { _ in }
         var doubleClick: () -> Void = {}
-        private var startY: CGFloat?
+        private var start: NSPoint?
 
         /// The first click into an inactive window grabs the line too.
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func mouseDown(with event: NSEvent) {
             // Only the lower half lies over the bar; the upper half is over the editor.
-            if event.clickCount == 2, convert(event.locationInWindow, from: nil).y < bounds.midY {
+            if axis == .horizontal, event.clickCount == 2, convert(event.locationInWindow, from: nil).y < bounds.midY {
                 doubleClick()
                 return
             }
-            startY = event.locationInWindow.y
+            start = event.locationInWindow
             resize(.began)
         }
 
         override func mouseDragged(with event: NSEvent) {
-            // Window coordinates grow upwards.
-            guard let startY else { return }
-            resize(.moved(startY - event.locationInWindow.y))
+            guard let start else { return }
+            let point = event.locationInWindow
+            // Window coordinates grow upwards and rightwards.
+            resize(.moved(axis == .horizontal ? start.y - point.y : point.x - start.x))
         }
 
         override func mouseUp(with event: NSEvent) {
-            guard startY != nil else { return }
-            startY = nil
+            guard start != nil else { return }
+            start = nil
             resize(.ended)
         }
 
         override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .resizeUpDown)
+            addCursorRect(bounds, cursor: axis == .horizontal ? .resizeUpDown : .resizeLeftRight)
         }
     }
 
     func makeNSView(context: Context) -> HandleView { HandleView() }
     func updateNSView(_ view: HandleView, context: Context) {
+        if view.axis != axis {
+            view.axis = axis
+            view.window?.invalidateCursorRects(for: view)
+        }
         view.resize = resize
         view.doubleClick = doubleClick
     }

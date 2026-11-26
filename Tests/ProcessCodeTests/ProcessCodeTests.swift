@@ -215,7 +215,7 @@ final class TerminalTests: XCTestCase {
 final class WorkspaceTests: XCTestCase {
     @MainActor
     func testDraggingTheSplitHandleReportsHowFarItMoved() throws {
-        let view = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: 400, height: SplitHandle.height))
+        let view = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: 400, height: SplitHandle.thickness))
         var drags: [String] = []
         view.resize = { phase in
             switch phase {
@@ -249,6 +249,21 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(drags, [], "and isn't a drag")
         try doubleClick(y: 8)   // the upper half, over the editor
         XCTAssertEqual(doubleClicks, 1, "the editor's side doesn't maximize the terminal")
+
+        // The sidebar's line is vertical and reports how far right it moved.
+        let side = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: SplitHandle.thickness, height: 400))
+        side.axis = .vertical
+        var widths: [String] = []
+        side.resize = { if case .moved(let right) = $0 { widths.append("moved \(Int(right))") } }
+        func at(_ type: NSEvent.EventType, x: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 100), modifierFlags: [], timestamp: 0,
+                                             windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        side.mouseDown(with: try at(.leftMouseDown, x: 250))
+        side.mouseDragged(with: try at(.leftMouseDragged, x: 280))
+        side.mouseDragged(with: try at(.leftMouseDragged, x: 230))
+        side.mouseUp(with: try at(.leftMouseUp, x: 230))
+        XCTAssertEqual(widths, ["moved 30", "moved -20"])
     }
 
     func testGoToFileRanksNameMatchesFirst() {
