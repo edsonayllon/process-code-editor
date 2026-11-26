@@ -71,10 +71,16 @@ struct SettingsView: View {
                 }
                 Toggle("Start it when a folder opens", isOn: $settings.startAgentOnOpen)
                     .tint(Theme.accentFill)
+                if settings.agent?.resumeCommand != nil {
+                    Toggle("Continue the folder's last conversation", isOn: $settings.continueConversation)
+                        .tint(Theme.accentFill)
+                        .disabled(!settings.startAgentOnOpen)
+                }
             } header: {
                 Text("Coding Agent")
             } footer: {
-                Text("The agent runs in a terminal tab in the folder you opened. When it exits, the tab stays open as a shell.")
+                Text("The agent runs in a terminal tab in the folder you opened. When it exits, the tab stays open as a shell. "
+                     + "A new agent tab always starts a new conversation.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

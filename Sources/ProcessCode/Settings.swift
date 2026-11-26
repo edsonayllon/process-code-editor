@@ -12,13 +12,53 @@ struct Agent: Identifiable, Equatable {
     let id: String
     let name: String
     let command: String
+    /// The command that carries on the last conversation in the folder, for an agent that keeps
+    /// its conversations where they can be found. Only Claude Code's is known to stay in the folder;
+    /// the others start fresh.
+    var resumeCommand: String? = nil
+    /// What installs the agent when it isn't found, typed into its terminal so the install is in
+    /// plain sight, then starts it. Claude Code's own installer needs nothing else. The others come
+    /// from Homebrew, or npm without it, and say what's needed when there's neither.
+    var installCommand: String? = nil
 
     static let presets = [
-        Agent(id: "claude", name: "Claude Code", command: "claude"),
-        Agent(id: "codex", name: "Codex", command: "codex"),
-        Agent(id: "gemini", name: "Gemini", command: "gemini"),
+        Agent(id: "claude", name: "Claude Code", command: "claude", resumeCommand: "claude --continue",
+              installCommand: "curl -fsSL https://claude.ai/install.sh | bash && export PATH=\"$HOME/.local/bin:$PATH\" && claude"),
+        Agent(id: "codex", name: "Codex", command: "codex",
+              installCommand: packageInstall(name: "Codex", brew: "--cask codex", npm: "@openai/codex", then: "codex")),
+        Agent(id: "gemini", name: "Gemini", command: "gemini",
+              installCommand: packageInstall(name: "Gemini", brew: "gemini-cli", npm: "@google/gemini-cli", then: "gemini")),
     ]
+
+    static func packageInstall(name: String, brew: String, npm: String, then command: String) -> String {
+        "if command -v brew >/dev/null; then brew install \(brew); elif command -v npm >/dev/null; then npm install -g \(npm); "
+            + "else echo \"\(name) installs with Homebrew (https://brew.sh) or Node (https://nodejs.org). Install one, then open a new agent tab.\"; false; fi && \(command)"
+    }
+
+    /// The program the command runs, its first word.
+    var program: String { command.split(separator: " ").first.map(String.init) ?? command }
     static let customID = "custom"
+
+    /// Whether there's an earlier conversation with this agent in `folder` to carry on.
+    func hasConversation(in folder: URL, home: String = TerminalSession.home) -> Bool {
+        guard resumeCommand != nil, id == "claude" else { return false }
+        // Claude Code keeps each folder's conversations in ~/.claude/projects, in a folder named
+        // after the path with everything but letters and digits made a dash. Its terminal is
+        // given no CLAUDE_CONFIG_DIR, so that's where they are. The shell may see the folder
+        // through a symlink, so both spellings are tried.
+        let paths = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path])
+        return paths.contains { path in
+            let store = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects/" + Agent.claudeFolderName(for: path))
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
+            return files.contains { $0.hasSuffix(".jsonl") }
+        }
+    }
+
+    static func claudeFolderName(for path: String) -> String {
+        String(path.unicodeScalars.map { scalar -> Character in
+            scalar.isASCII && CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "-"
+        })
+    }
 }
 
 /// The few things that can be customized: appearance, the code font, and which agent starts.
@@ -41,6 +81,9 @@ final class Settings: ObservableObject {
     @Published var agentID: String { didSet { defaults.set(agentID, forKey: "agentID") } }
     @Published var customAgentCommand: String { didSet { defaults.set(customAgentCommand, forKey: "customAgentCommand") } }
     @Published var startAgentOnOpen: Bool { didSet { defaults.set(startAgentOnOpen, forKey: "startAgentOnOpen") } }
+    /// The agent that starts with a folder carries on the folder's last conversation, rather than
+    /// starting a new one. For agents that can (Claude Code).
+    @Published var continueConversation: Bool { didSet { defaults.set(continueConversation, forKey: "continueConversation") } }
 
     private let defaults: UserDefaults
 
@@ -55,6 +98,7 @@ final class Settings: ObservableObject {
         agentID = defaults.string(forKey: "agentID") ?? "claude"
         customAgentCommand = defaults.string(forKey: "customAgentCommand") ?? ""
         startAgentOnOpen = defaults.object(forKey: "startAgentOnOpen") as? Bool ?? true
+        continueConversation = defaults.object(forKey: "continueConversation") as? Bool ?? true
     }
 
     /// The font families that can be picked on this Mac.

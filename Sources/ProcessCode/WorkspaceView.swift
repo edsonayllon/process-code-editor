@@ -642,6 +642,7 @@ private struct TerminalPanel: View {
             .background(BarHover(workspace: workspace))
 
             if let session = workspace.activeTerminal {
+                AgentMissingBar(session: session)
                 // Under the editor the text starts where the code does; alone, the column is centred.
                 ReadableColumn(leading: underEditor ? settings.codeLeading : 12, centred: !underEditor, onMarginClick: session.focus) {
                     TerminalHost(session: session, focusToken: workspace.terminalFocusToken)
@@ -877,5 +878,38 @@ struct SplitHandle: NSViewRepresentable {
         }
         view.resize = resize
         view.doubleClick = doubleClick
+    }
+}
+
+/// Above a terminal whose agent isn't installed: what's wrong, and the button that installs it.
+private struct AgentMissingBar: View {
+    @ObservedObject var session: TerminalSession
+
+    var body: some View {
+        if session.agentMissing, let agent = session.agent {
+            HStack(spacing: 8) {
+                Text("\(agent.name) isn't installed on this Mac yet.")
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Button("Install \(agent.name)", action: session.installAgent)
+                    .help(agent.id == "claude" ? "Runs Anthropic's installer in this terminal" : "Installs it with Homebrew, or npm, in this terminal")
+                Button {
+                    session.agentMissing = false
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.tertiary)
+                .help("Hide")
+            }
+            .font(.system(size: 11))
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.radius))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
     }
 }

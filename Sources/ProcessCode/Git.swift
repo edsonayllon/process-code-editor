@@ -169,12 +169,12 @@ enum Shell {
     /// running after that many seconds is stopped and the result has status 124.
     @discardableResult
     static func run(_ tool: String, _ arguments: [String], in directory: URL? = nil, mergingErrors: Bool = true,
-                    timeout: TimeInterval? = nil) -> Result {
+                    timeout: TimeInterval? = nil, environment: [String: String]? = nil) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tool)
         process.arguments = arguments
         process.currentDirectoryURL = directory
-        process.environment = environment
+        process.environment = environment ?? self.environment
         let pipe = Pipe()
         let errorPipe = mergingErrors ? pipe : Pipe()
         process.standardOutput = pipe

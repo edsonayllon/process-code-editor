@@ -93,6 +93,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     let view = LeanTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
     let agent: Agent?
     @Published var title: String
+    /// The agent this tab was to start isn't installed, so the tab offers to install it.
+    @Published var agentMissing = false
     var onExit: (() -> Void)?
     private var observers: Set<AnyCancellable> = []
 
@@ -101,11 +103,28 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         return ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
     }
 
+    /// A home folder for terminals other than the user's own, set by `--terminal-home` to try the
+    /// app as someone who has nothing installed there yet (no agent, no shell setup).
+    nonisolated(unsafe) static var homeOverride: String?
+
+    /// The home folder terminals start with.
+    nonisolated static var home: String { homeOverride ?? NSHomeDirectory() }
+
     /// The environment for a shell: this app's, minus what belongs to whatever started the app,
     /// plus what a terminal is expected to set.
     nonisolated static func environment(_ base: [String: String] = ProcessInfo.processInfo.environment, shell: String) -> [String] {
+        variables(base, shell: shell).map { "\($0.key)=\($0.value)" }.sorted()
+    }
+
+    nonisolated static func variables(_ base: [String: String] = ProcessInfo.processInfo.environment, shell: String) -> [String: String] {
         var env = base.filter { key, _ in
             !key.hasPrefix("CLAUDE") && !key.hasPrefix("VSCODE") && !key.hasPrefix("TERM_PROGRAM") && key != "TERM_SESSION_ID"
+        }
+        if let homeOverride {
+            // As a new user's terminal: the system's PATH, and nothing set up by anyone's shell.
+            env["HOME"] = homeOverride
+            env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+            env = env.filter { key, _ in key != "ZDOTDIR" && !key.hasPrefix("NVM_") && !key.hasPrefix("HOMEBREW_") }
         }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -113,35 +132,129 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         env["SHELL"] = shell
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         if env["PATH"] == nil { env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin" }
-        return env.map { "\($0.key)=\($0.value)" }.sorted()
+        return env
     }
 
     /// The arguments that start the shell: a login shell, so the PATH is the one Terminal has
-    /// (nvm, Homebrew), and with an agent, the agent first and the shell once it exits.
-    nonisolated static func arguments(shell: String, agent: Agent?) -> [String] {
+    /// (nvm, Homebrew), and with an agent, the agent first and the shell once it exits. With
+    /// `resume`, the agent carries on its last conversation, if it knows how.
+    nonisolated static func arguments(shell: String, agent: Agent?, resume: Bool = false) -> [String] {
         guard let agent else { return ["-l"] }
-        return ["-l", "-i", "-c", "\(agent.command); exec \(LeanTerminalView.shellEscaped(shell)) -l"]
+        let command = resume ? agent.resumeCommand ?? agent.command : agent.command
+        return ["-l", "-i", "-c", "\(command); exec \(LeanTerminalView.shellEscaped(shell)) -l"]
     }
 
-    init(directory: URL, agent: Agent?) {
+    init(directory: URL, agent: Agent?, resume: Bool = false) {
         self.agent = agent
         let shell = TerminalSession.userShell
         title = agent?.name ?? (shell as NSString).lastPathComponent
         super.init()
         view.processDelegate = self
-        view.startProcess(executable: shell, args: TerminalSession.arguments(shell: shell, agent: agent),
+        view.startProcess(executable: shell, args: TerminalSession.arguments(shell: shell, agent: agent, resume: resume),
                           environment: TerminalSession.environment(shell: shell), currentDirectory: directory.path)
         Settings.shared.$fontName.merge(with: Settings.shared.$fontSize.map { _ in "" }).dropFirst(2)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.view.font = Settings.shared.codeFont }
             .store(in: &observers)
+        // Only the agents it knows how to install: a custom command may not start with a program's name.
+        if let agent, agent.installCommand != nil { checkInstalled(agent, shell: shell, directory: directory) }
+    }
+
+    /// Looks for the agent the way its terminal will, in a login shell, alongside the terminal
+    /// starting rather than before it. A check that can't finish says nothing.
+    private func checkInstalled(_ agent: Agent, shell: String, directory: URL) {
+        let environment = TerminalSession.variables(shell: shell)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = TerminalSession.isInstalled(agent.program, shell: shell, directory: directory, environment: environment)
+            // Only at the shell's prompt: anything running in the tab means the agent did start.
+            if found == false { DispatchQueue.main.async { if let self, !self.isBusy { self.agentMissing = true } } }
+        }
+    }
+
+    /// Whether a login shell finds `program`; nil if the shell couldn't say within 15 seconds.
+    nonisolated static func isInstalled(_ program: String, shell: String, directory: URL, environment: [String: String]) -> Bool? {
+        let result = Shell.run(shell, ["-l", "-i", "-c", "command -v -- \(LeanTerminalView.shellEscaped(program)) >/dev/null 2>&1"],
+                               in: directory, timeout: 15, environment: environment)
+        switch result.status {
+        case 0: return true
+        case 1, 127: return false
+        default: return nil
+        }
+    }
+
+    /// Types the agent's installer into the terminal, at the shell's prompt where the missing agent
+    /// left it, so the install runs in sight and the agent starts once it's done.
+    func installAgent() {
+        agentMissing = false
+        // Typed only at the prompt, never into a program that's running.
+        guard let command = agent?.installCommand, !isBusy else { return }
+        view.send(txt: command + "\r")
+        focus()
     }
 
     /// True while something other than the shell's prompt is running (an agent, a server, a build).
-    var isBusy: Bool {
-        guard let process = view.process, process.running else { return false }
+    var isBusy: Bool { foregroundGroup != nil }
+
+    /// The process group running in the foreground, or nil at the shell's prompt.
+    private var foregroundGroup: pid_t? {
+        guard let process = view.process, process.running else { return nil }
         let foreground = tcgetpgrp(process.childfd)
-        return foreground > 0 && foreground != process.shellPid
+        return foreground > 0 && foreground != process.shellPid ? foreground : nil
+    }
+
+    /// What's running, in a few words, to name it before it's ended: "npm run dev", or
+    /// "Claude Code (“✳ Fix the login”)" with the title it gave its tab. Nil at the prompt.
+    var running: String? {
+        guard let group = foregroundGroup else { return nil }
+        let arguments = TerminalSession.commandLine(of: group)
+        return TerminalSession.summary(arguments: arguments, agent: agent, title: title,
+                                       shell: (TerminalSession.userShell as NSString).lastPathComponent)
+    }
+
+    /// The agent goes by its name, anything else by its command, and the tab's title is added when
+    /// it says something the name doesn't.
+    nonisolated static func summary(arguments: [String]?, agent: Agent?, title: String, shell: String) -> String {
+        let command = arguments.map(describe) ?? "a program"
+        let program = command.split(separator: " ").first.map(String.init)
+        let isAgent = agent.map { $0.command.split(separator: " ").first.map { ($0 as NSString).lastPathComponent } == program } ?? false
+        let name = isAgent ? agent?.name ?? command : command
+        // Titles often lead with a mark of their own ("✳ Claude Code"), which says nothing.
+        let plain = String(title.drop { !$0.isLetter && !$0.isNumber })
+        guard !plain.isEmpty, plain != agent?.name, plain != shell, !name.hasPrefix(plain), !command.hasPrefix(plain) else { return name }
+        return "\(name) (“\(title)”)"
+    }
+
+    /// The arguments a process was started with, as the system keeps them.
+    nonisolated static func commandLine(of pid: pid_t) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        // The argument count, the path it was run from, padding, then the arguments, each ending in a zero.
+        let count = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        var index = MemoryLayout<Int32>.size
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        var arguments: [String] = []
+        while arguments.count < count, index < size {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            arguments.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return arguments.isEmpty ? nil : arguments
+    }
+
+    /// A command line made short enough to read at a glance: programs go by their names, not their
+    /// paths, and a script run by its interpreter goes by the script ("node …/bin/npm run dev" is
+    /// "npm run dev").
+    nonisolated static func describe(_ arguments: [String]) -> String {
+        var words = arguments.map { $0.hasPrefix("/") ? ($0 as NSString).lastPathComponent : $0 }
+        let interpreters: Set = ["node", "python", "python3", "ruby", "bun", "deno", "perl"]
+        if words.count > 1, interpreters.contains(words[0]), arguments[1].contains("/") { words.removeFirst() }
+        let text = words.joined(separator: " ")
+        return text.count > 60 ? String(text.prefix(59)) + "…" : text
     }
 
     func terminate() {
