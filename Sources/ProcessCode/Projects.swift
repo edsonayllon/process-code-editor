@@ -369,13 +369,19 @@ final class ProjectStore: ObservableObject {
         guard case .success(let remotes) = remoteRepositories() else { return nil }
         var map: [String: Bool] = [:]
         for remote in remotes { map[remote.nameWithOwner.lowercased()] = remote.isPrivate }
-        let others = slugs.filter { map[$0] == nil && !asked.contains($0) }
-        for slug in others {
-            let result = Shell.run("/usr/bin/env", ["gh", "repo", "view", slug, "--json", "isPrivate", "--jq", ".isPrivate"],
+        let others = Array(slugs.filter { map[$0] == nil && !asked.contains($0) })
+        // All at once, so a slow network costs one time limit, not one per repository.
+        var answers = [Bool?](repeating: nil, count: others.count)
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: others.count) { index in
+            let result = Shell.run("/usr/bin/env", ["gh", "repo", "view", others[index], "--json", "isPrivate", "--jq", ".isPrivate"],
                                    mergingErrors: false, timeout: ghTimeout)
-            if result.status == 0 { map[slug] = result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true" }
+            guard result.status == 0 else { return }
+            let isPrivate = result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+            lock.withLock { answers[index] = isPrivate }
         }
-        return (map, others)
+        for (slug, answer) in zip(others, answers) { if let answer { map[slug] = answer } }
+        return (map, Set(others))
     }
 
     /// How long a quick question to GitHub may take before it's given up on.
