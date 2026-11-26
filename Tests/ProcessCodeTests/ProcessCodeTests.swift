@@ -383,6 +383,9 @@ final class ProjectTests: XCTestCase {
         let detached = ProjectStore.publishFailure("rejected", remoteAdded: true, branch: "detached")
         XCTAssertFalse(detached.contains("origin detached"))
         XCTAssertTrue(detached.contains("git switch -c <new-branch>"), "not main, which usually exists already")
+        let unlinked = ProjectStore.publishFailure("network", remoteAdded: false, madeAt: "https://github.com/o/app", branch: "main")
+        XCTAssertTrue(unlinked.contains("git remote add origin https://github.com/o/app && git push -u origin main"))
+        XCTAssertFalse(unlinked.contains("right-click"), "publishing again would collide with the repository it made")
         let nothing = ProjectStore.publishFailure("not signed in", remoteAdded: false, branch: "main")
         XCTAssertTrue(nothing.contains("right-click menu"))
     }

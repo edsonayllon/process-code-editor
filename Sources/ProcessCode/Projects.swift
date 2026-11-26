@@ -555,21 +555,32 @@ final class ProjectStore: ObservableObject {
         return String(single.drop { $0 == "-" })
     }
 
-    /// What to say when publishing failed, and how to finish. gh makes the GitHub repository and adds
-    /// origin before it pushes, so a failed push leaves a remote behind, and publishing again would be
-    /// refused: then the way on is to push.
-    nonisolated static func publishFailure(_ output: String, remoteAdded: Bool, branch: String?) -> String {
-        guard remoteAdded else {
-            return "Publishing failed: \(output)\n\nPublish it again from its right-click menu in Projects."
-        }
-        let intro = "GitHub made the repository and set it as origin, but the push didn't finish: \(output)\n\n"
+    /// What to say when publishing failed, and how to finish. gh makes the GitHub repository, then
+    /// adds origin, then pushes. A failure after the first step leaves a repository on GitHub that
+    /// publishing again would collide with, so the way on is to finish by hand: add origin if it's
+    /// missing (`madeAt` is the new repository's address), then push.
+    nonisolated static func publishFailure(_ output: String, remoteAdded: Bool, madeAt: String? = nil, branch: String?) -> String {
         // read(status:) names a detached HEAD "detached"; there's no branch to push until one is made.
-        guard let branch, branch != "detached" else {
-            // Any name will do, but not one that's taken, as main usually is.
-            return intro + "You're not on a branch. Make one and push it from the terminal: "
-                + "git switch -c <new-branch> && git push -u origin <new-branch>"
+        // Any new name will do, but not one that's taken, as main usually is.
+        let onBranch = branch != nil && branch != "detached"
+        let push = onBranch ? "git push -u origin \(branch ?? "")" : "git switch -c <new-branch> && git push -u origin <new-branch>"
+        if remoteAdded {
+            return "GitHub made the repository and set it as origin, but the push didn't finish: \(output)\n\n"
+                + (onBranch ? "Push it from the terminal: " : "You're not on a branch. Make one and push it from the terminal: ") + push
         }
-        return intro + "Push it from the terminal: git push -u origin \(branch)"
+        if let madeAt {
+            return "GitHub made the repository, but it wasn't set as origin: \(output)\n\n"
+                + "Finish from the terminal: git remote add origin \(madeAt) && " + push
+        }
+        return "Publishing failed: \(output)\n\nPublish it again from its right-click menu in Projects."
+    }
+
+    /// The address of your repository on GitHub with this name, or nil if there's none (or gh can't say).
+    nonisolated static func gitHubRepository(named name: String) -> String? {
+        let result = Shell.run("/usr/bin/env", ["gh", "repo", "view", name, "--json", "url", "--jq", ".url"],
+                               mergingErrors: false, timeout: ghTimeout)
+        let address = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.status == 0 && !address.isEmpty ? address : nil
     }
 
     /// The `gh` arguments that make the GitHub repository, point origin at it and, if there's
@@ -589,11 +600,18 @@ final class ProjectStore: ObservableObject {
         guard !name.isEmpty else { return .failure(ProjectError(message: "The repository needs a name on GitHub.")) }
         let fresh = project.inspected()
         guard !fresh.isPublished else { return .failure(ProjectError(message: "This repository already has a remote.")) }
+        // A name that's taken is refused before anything is made, so a repository found under it
+        // after a failure is one this publish made.
+        if gitHubRepository(named: name) != nil {
+            return .failure(ProjectError(message: "You already have a repository named “\(name)” on GitHub. Choose another name."))
+        }
         let arguments = publishArguments(path: project.path, name: name, description: description, isPrivate: isPrivate, hasCommits: fresh.hasCommits)
         let result = Shell.run("/usr/bin/env", arguments, in: project.url)
         guard result.status == 0 else {
             let after = project.inspected()
-            return .failure(ProjectError(message: publishFailure(explain(result, tool: "gh"), remoteAdded: after.isPublished, branch: after.branch)))
+            let made = after.isPublished ? nil : gitHubRepository(named: name)
+            return .failure(ProjectError(message: publishFailure(explain(result, tool: "gh"), remoteAdded: after.isPublished,
+                                                                 madeAt: made, branch: after.branch)))
         }
         return .success(project.url)
     }
