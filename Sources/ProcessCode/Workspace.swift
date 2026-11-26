@@ -97,6 +97,11 @@ final class Workspace: ObservableObject {
     private var gitRefreshPending = false
     private var documentObservers: [String: AnyCancellable] = [:]
     private let defaults = UserDefaults.standard
+    /// The window this folder is open in.
+    weak var window: NSWindow?
+    /// Undo for what's done to files in the sidebar (moving them to the Trash). Each editor keeps
+    /// its own history for its text.
+    let fileUndo = UndoManager()
 
     var activeDocument: Document? { documents.first { $0.id == activeDocumentID } }
     var sideDocument: Document? { documents.first { $0.id == sideDocumentID } }
@@ -153,16 +158,23 @@ final class Workspace: ObservableObject {
             let url = self.root.appendingPathComponent(path)
             if FileManager.default.fileExists(atPath: url.path) { add(Document(url: url)) }
         }
+        restoreDrafts()
         activeDocumentID = (saved["active"] as? String).flatMap { path in documents.first { relativePath(of: $0.url) == path }?.id } ?? documents.first?.id
         if let side = (saved["side"] as? String).flatMap({ path in documents.first { relativePath(of: $0.url) == path }?.id }), side != activeDocumentID {
             sideDocumentID = side
         }
         terminalMaximized = documents.isEmpty || (saved["terminalMaximized"] as? Bool ?? false)
-        newTerminal(agent: launchAgent ? Settings.shared.agent : nil)
+        // The agent that starts with the folder carries on where its last conversation here left
+        // off. One started later, in a new tab, starts fresh.
+        let agent = launchAgent ? Settings.shared.agent : nil
+        newTerminal(agent: agent, resume: Workspace.remembersState && Settings.shared.continueConversation
+                    && agent?.hasConversation(in: self.root) == true)
     }
 
     func close() {
         barCheck?.invalidate()
+        // Unsaved text stays as drafts, and the tabs that hold it are reopened with the folder.
+        documents.forEach { $0.keepDraft() }
         saveState()
         watcher?.stop()
         terminals.forEach { $0.terminate() }
@@ -199,6 +211,23 @@ final class Workspace: ObservableObject {
     }
 
     // MARK: State kept between launches
+
+    /// Reopens the files that had unsaved changes when the window closed or the app quit, with
+    /// those changes, still unsaved. A file that's gone from disk comes back with its text, and
+    /// saving it puts it back.
+    private func restoreDrafts() {
+        guard Workspace.remembersState else { return }
+        for draft in Drafts.all(root: root) {
+            let document: Document
+            if let open = documents.first(where: { $0.url.standardizedFileURL.path == draft.path }) {
+                document = open
+            } else {
+                document = Document(url: URL(fileURLWithPath: draft.path), draft: draft.text)
+                add(document)
+            }
+            document.restore(draft)
+        }
+    }
 
     private var stateKey: String { "workspace." + root.path }
 
@@ -364,6 +393,7 @@ final class Workspace: ObservableObject {
     // MARK: Documents
 
     private func add(_ document: Document) {
+        if Workspace.remembersState { document.draftRoot = root }
         documents.append(document)
         // A change inside a document (its dirty mark) redraws the tab bar.
         documentObservers[document.id] = document.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -411,7 +441,7 @@ final class Workspace: ObservableObject {
             switch alert.runModal() {
             case .alertFirstButtonReturn: if !save(document) { return false }
             case .alertSecondButtonReturn: return false
-            default: break
+            default: document.discardDraft()
             }
         }
         guard let index = documents.firstIndex(where: { $0.id == document.id }) else { return true }
@@ -435,7 +465,7 @@ final class Workspace: ObservableObject {
         do {
             try document.save()
         } catch {
-            NSAlert(error: error).runModal()
+            Workspace.report(error, title: "Couldn't save “\(document.name)”")
             return false
         }
         if document.isTeX { build(document) }
@@ -481,8 +511,8 @@ final class Workspace: ObservableObject {
     // MARK: Terminal
 
     @discardableResult
-    func newTerminal(agent: Agent? = nil) -> TerminalSession {
-        let session = TerminalSession(directory: root, agent: agent)
+    func newTerminal(agent: Agent? = nil, resume: Bool = false) -> TerminalSession {
+        let session = TerminalSession(directory: root, agent: agent, resume: resume)
         session.onExit = { [weak self, weak session] in
             if let session { self?.remove(session) }
         }
@@ -504,10 +534,10 @@ final class Workspace: ObservableObject {
 
     /// Closes a terminal tab, asking first if something is still running in it.
     func close(_ session: TerminalSession) {
-        if session.isBusy {
+        if let running = session.running {
             let alert = NSAlert()
             alert.messageText = "Close “\(session.title)”?"
-            alert.informativeText = "Something is still running in this terminal. Closing it will end it."
+            alert.informativeText = Workspace.runningWarning([running], closing: "this terminal")
             alert.addButton(withTitle: "Close")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -574,7 +604,16 @@ final class Workspace: ObservableObject {
         saveState()
     }
 
-    var busyTerminalCount: Int { terminals.filter(\.isBusy).count }
+    /// What's running in each terminal that isn't at its prompt.
+    var running: [String] { terminals.compactMap(\.running) }
+
+    /// The warning before closing ends what's running.
+    nonisolated static func runningWarning(_ running: [String], closing: String) -> String {
+        let list = running.map { "• " + $0 }.joined(separator: "\n")
+        return running.count == 1
+            ? "This is still running, and closing \(closing) will end it:\n\n" + list
+            : "These are still running, and closing \(closing) will end them:\n\n" + list
+    }
 
     // MARK: File operations
 
@@ -598,7 +637,7 @@ final class Workspace: ObservableObject {
                 guard FileManager.default.createFile(atPath: url.path, contents: nil) else { throw CocoaError(.fileWriteUnknown) }
             }
         } catch {
-            NSAlert(error: error).runModal()
+            Workspace.report(error, title: "Couldn't create “\(name)”")
             return
         }
         reveal(url)
@@ -610,23 +649,169 @@ final class Workspace: ObservableObject {
         guard let name = Workspace.ask("Rename", detail: url.lastPathComponent, value: url.lastPathComponent, action: "Rename"),
               name != url.lastPathComponent else { return }
         let destination = url.deletingLastPathComponent().appendingPathComponent(name)
-        do { try FileManager.default.moveItem(at: url, to: destination) } catch { NSAlert(error: error).runModal(); return }
+        do {
+            try FileManager.default.moveItem(at: url, to: destination)
+        } catch {
+            Workspace.report(error, title: "Couldn't rename “\(url.lastPathComponent)”")
+            return
+        }
         if let document = documents.first(where: { $0.url == url }), close(document) { open(destination) }
         reloadTree()
     }
 
+    /// Moves a file or folder to the Trash. It asks first only when something would be lost if the
+    /// Trash were emptied: work git doesn't have, or unsaved text in an open file. Edit ▸ Undo puts
+    /// it back.
     func trash(_ url: URL) {
-        let alert = NSAlert()
-        alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) } catch { NSAlert(error: error).runModal(); return }
-        for document in documents where document.url.path == url.path || document.url.path.hasPrefix(url.path + "/") {
+        let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+        let unsaved = documents(under: url).filter(\.isDirty).map(\.name)
+        // Asked fresh, since the agent may have made the file a moment ago.
+        let status = Git.status(root: root)
+        if let warning = Workspace.trashWarning(path: relativePath(of: url), isDirectory: isDirectory, status: status, unsaved: unsaved) {
+            let alert = NSAlert()
+            alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
+            alert.informativeText = warning
+            alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        moveToTrash(url)
+    }
+
+    private func documents(under url: URL) -> [Document] {
+        documents.filter { $0.url.path == url.path || $0.url.path.hasPrefix(url.path + "/") }
+    }
+
+    private func moveToTrash(_ url: URL) {
+        var trashed: NSURL?
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+        } catch {
+            Workspace.report(error, title: "Couldn't move “\(url.lastPathComponent)” to the Trash")
+            return
+        }
+        for document in documents(under: url) {
+            document.discardDraft()
             document.isDirty = false
             close(document)
         }
         reloadTree()
+        if let trashed = trashed as URL? {
+            fileUndo.registerUndo(withTarget: self) { $0.putBack(trashed, to: url) }
+            fileUndo.setActionName("Move to Trash")
+        }
+        // Out of the editor, so ⌘Z puts the file back rather than undoing typing. The tab that
+        // takes the closed one's place grabs the keyboard a moment later, so this waits for it.
+        DispatchQueue.main.async { [weak self] in
+            guard let window = self?.window, window.firstResponder is NSTextView else { return }
+            window.makeFirstResponder(nil)
+        }
+    }
+
+    /// Takes a file back out of the Trash, unless something has taken its place.
+    private func putBack(_ trashed: URL, to original: URL) {
+        let title = "Couldn't put “\(original.lastPathComponent)” back"
+        guard FileManager.default.fileExists(atPath: trashed.path) else {
+            Workspace.tell(title, "It's no longer in the Trash.")
+            return
+        }
+        guard !FileManager.default.fileExists(atPath: original.path) else {
+            Workspace.tell(title, "Something named “\(original.lastPathComponent)” is there now. The one you moved is still in the Trash.")
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: trashed, to: original)
+        } catch {
+            Workspace.report(error, title: title)
+            return
+        }
+        fileUndo.registerUndo(withTarget: self) { $0.moveToTrash(original) }
+        fileUndo.setActionName("Move to Trash")
+        reveal(original)
+        reloadTree()
+    }
+
+    /// What would be lost if `path` went to the Trash and the Trash were emptied, or nil if
+    /// nothing would: git has all of it and no open file has unsaved text.
+    nonisolated static func trashWarning(path: String, isDirectory: Bool, status: GitStatus, unsaved: [String]) -> String? {
+        var risks: [String] = []
+        let state = status.state(of: path, isDirectory: isDirectory)
+        if !status.isRepository {
+            risks.append("This folder isn't a git repository, so the Trash will hold the only copy.")
+        } else if state == .untracked || state == .added {
+            risks.append("It isn't committed, so the Trash will hold the only copy.")
+        } else if state == .ignored {
+            risks.append("Git ignores it, so the Trash will hold the only copy.")
+        } else if isDirectory {
+            // A folder with an entry of its own is a submodule with changes in it.
+            if let own = status.entries[path] ?? status.entries[path + "/"], own != .deleted {
+                risks.append("It has changes that aren't committed.")
+            }
+            let inside = status.entries.filter { $0.key.hasPrefix(path + "/") && $0.value != .deleted }
+            func names(_ paths: [String]) -> String {
+                paths.prefix(3).map { String($0.dropFirst(path.count + 1)) }.joined(separator: ", ") + (paths.count > 3 ? ", …" : "")
+            }
+            let new = inside.filter { $0.value == .untracked || $0.value == .added }.keys.sorted()
+            if !new.isEmpty {
+                risks.append("Some of what's in it isn't committed (\(names(new))), so the Trash will hold the only copy of that.")
+            }
+            let changed = inside.values.filter { [.modified, .renamed, .conflicted].contains($0) }.count
+            if changed > 0 {
+                risks.append(changed == 1 ? "1 file in it has changes that aren't committed."
+                             : "\(changed) files in it have changes that aren't committed.")
+            }
+            let ignored = inside.filter { $0.value == .ignored }.keys.sorted()
+            if !ignored.isEmpty {
+                risks.append("Git ignores some of what's in it (\(names(ignored))), so the Trash will hold the only copy of that.")
+            }
+        } else if let state, state != .deleted {
+            risks.append("It has changes that aren't committed.")
+        }
+        if unsaved.count == 1 {
+            risks.append("“\(unsaved[0])” has unsaved changes, which will be lost.")
+        } else if unsaved.count > 1 {
+            risks.append("\(unsaved.count) open files in it have unsaved changes, which will be lost.")
+        }
+        guard !risks.isEmpty else { return nil }
+        return (risks + ["It moves to the Trash, where you can put it back. Edit ▸ Undo puts it back at once."]).joined(separator: "\n\n")
+    }
+
+    // MARK: Errors
+
+    /// Says that something couldn't be done, why, and what to do about it.
+    static func report(_ error: Error, title: String) {
+        tell(title, explain(error))
+    }
+
+    static func tell(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.runModal()
+    }
+
+    /// What went wrong with a file, in words that point at the cause and the way out.
+    nonisolated static func explain(_ error: Error) -> String {
+        let error = error as NSError
+        guard error.domain == NSCocoaErrorDomain else { return error.localizedDescription }
+        switch CocoaError.Code(rawValue: error.code) {
+        case .fileWriteNoPermission, .fileReadNoPermission:
+            return "Process Code isn't allowed to change it. The file or its folder may be locked or belong to another user "
+                + "(the Finder's Get Info shows which), or the app may need access to this folder in System Settings ▸ Privacy & Security ▸ Files and Folders."
+        case .fileWriteOutOfSpace:
+            return "The disk is full. Free some space, then try again."
+        case .fileWriteVolumeReadOnly:
+            return "This disk can only be read, so nothing on it can be changed."
+        case .fileWriteFileExists:
+            return "Something with that name is already there. Choose another name."
+        case .fileNoSuchFile, .fileReadNoSuchFile:
+            return "It isn't there any more. Something else may have moved or deleted it."
+        case .fileWriteInvalidFileName:
+            return "That name can't be used for a file. Try one without “:”."
+        default:
+            return error.localizedDescription
+        }
     }
 
     /// Asks for a name in a small dialog; nil if cancelled or left empty.

@@ -209,6 +209,8 @@ final class EditorController: NSObject, NSTextViewDelegate {
 
     /// Called after every edit by the user.
     var onEdit: (() -> Void)?
+    /// This file's undo history, apart from the other files' and from the window's.
+    private let history = UndoManager()
 
     var text: String { textView.string }
 
@@ -310,6 +312,8 @@ final class EditorController: NSObject, NSTextViewDelegate {
     }
 
     func focus() { textView.window?.makeFirstResponder(textView) }
+
+    func undoManager(for view: NSTextView) -> UndoManager? { history }
 
     /// Scrolls to a 1-based line and puts the insertion point there.
     func reveal(line: Int) {
