@@ -370,7 +370,8 @@ final class ProjectStore: ObservableObject {
         var map: [String: Bool] = [:]
         for remote in remotes { map[remote.nameWithOwner.lowercased()] = remote.isPrivate }
         let others = Array(slugs.filter { map[$0] == nil && !asked.contains($0) })
-        // All at once, so a slow network costs one time limit, not one per repository.
+        // Side by side (as many at a time as there are cores), so a slow network costs a time limit
+        // per batch, not one per repository.
         var answers = [Bool?](repeating: nil, count: others.count)
         let lock = NSLock()
         DispatchQueue.concurrentPerform(iterations: others.count) { index in
