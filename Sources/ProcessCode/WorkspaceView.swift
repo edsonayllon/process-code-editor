@@ -810,7 +810,7 @@ struct SplitHandle: NSViewRepresentable {
     static let height: CGFloat = 10
 
     let resize: (Drag) -> Void
-    /// What a double-click on the bar under the handle does.
+    /// What a double-click on the bar under the handle's lower half does.
     var doubleClick: () -> Void = {}
 
     final class HandleView: NSView {
@@ -822,7 +822,8 @@ struct SplitHandle: NSViewRepresentable {
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func mouseDown(with event: NSEvent) {
-            if event.clickCount == 2 {
+            // Only the lower half lies over the bar; the upper half is over the editor.
+            if event.clickCount == 2, convert(event.locationInWindow, from: nil).y < bounds.midY {
                 doubleClick()
                 return
             }

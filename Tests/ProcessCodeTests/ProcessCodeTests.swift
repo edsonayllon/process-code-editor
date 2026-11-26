@@ -238,12 +238,17 @@ final class WorkspaceTests: XCTestCase {
         var doubleClicks = 0
         view.doubleClick = { doubleClicks += 1 }
         drags = []
-        let second = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 100, y: 300), modifierFlags: [],
-                                                      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 2, pressure: 1))
-        view.mouseDown(with: second)
-        view.mouseUp(with: try event(.leftMouseUp, y: 300))
+        func doubleClick(y: CGFloat) throws {
+            view.mouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 100, y: y), modifierFlags: [],
+                                                                  timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0,
+                                                                  clickCount: 2, pressure: 1)))
+            view.mouseUp(with: try event(.leftMouseUp, y: y))
+        }
+        try doubleClick(y: 2)   // the lower half, over the terminal's bar
         XCTAssertEqual(doubleClicks, 1, "a double-click on the bar under the handle still maximizes the terminal")
         XCTAssertEqual(drags, [], "and isn't a drag")
+        try doubleClick(y: 8)   // the upper half, over the editor
+        XCTAssertEqual(doubleClicks, 1, "the editor's side doesn't maximize the terminal")
     }
 
     func testGoToFileRanksNameMatchesFirst() {
