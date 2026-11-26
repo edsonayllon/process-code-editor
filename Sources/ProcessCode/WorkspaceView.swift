@@ -5,6 +5,8 @@ import SwiftUI
 struct WorkspaceView: View {
     @ObservedObject var workspace: Workspace
     @ObservedObject private var settings = Settings.shared
+    /// The terminal's share of the height when a drag on its bar began.
+    @State private var dragStartFraction: CGFloat = 0
 
     var body: some View {
         GeometryReader { window in
@@ -57,15 +59,21 @@ struct WorkspaceView: View {
                         }
                     }
                         .frame(height: workspace.terminalVisible ? max(area.size.height * (1 - workspace.terminalFraction), 80) : nil)
-                    if workspace.terminalVisible {
-                        Divider1(axis: .horizontal, onDrag: { y in
-                            let fraction = 1 - (y - area.frame(in: .global).minY) / max(area.size.height, 1)
-                            workspace.terminalFraction = min(max(fraction, 0.12), 0.88)
-                        }, onEnd: workspace.saveState)
-                    }
+                    // The handle for this line is laid over it by the terminal panel (SplitHandle).
+                    if workspace.terminalVisible { Divider1(axis: .horizontal) }
                 }
                 if workspace.terminalVisible || !workspace.editorShown {
-                    TerminalPanel(workspace: workspace, width: area.size.width)
+                    // The editor and terminal on each side of the line take the pointer, so the
+                    // handle is an AppKit strip laid over the line, above both of them.
+                    let split = workspace.editorShown && workspace.activeDocument != nil
+                    TerminalPanel(workspace: workspace, width: area.size.width, resize: split ? { phase in
+                        switch phase {
+                        case .began: dragStartFraction = workspace.terminalFraction
+                        case .moved(let down):
+                            workspace.terminalFraction = min(max(dragStartFraction - down / max(area.size.height, 1), 0.12), 0.88)
+                        case .ended: workspace.saveState()
+                        }
+                    } : nil)
                 }
             }
         }
@@ -552,6 +560,8 @@ private struct TerminalPanel: View {
     @ObservedObject var workspace: Workspace
     /// How wide the panel is, to know whether there's room for margins.
     let width: CGFloat
+    /// Dragging the line above the panel resizes the split, when there's an editor above it.
+    var resize: ((SplitHandle.Drag) -> Void)?
     @ObservedObject private var settings = Settings.shared
 
     /// The editor is showing above the terminal.
@@ -628,6 +638,13 @@ private struct TerminalPanel: View {
             }
         }
         .background(Theme.background)
+        .overlay(alignment: .top) {
+            if let resize {
+                SplitHandle(resize: resize)
+                    .frame(height: SplitHandle.height)
+                    .offset(y: -SplitHandle.height / 2)
+            }
+        }
     }
 }
 
@@ -775,4 +792,53 @@ private struct BarDoubleClick: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ClickView { ClickView() }
     func updateNSView(_ view: ClickView, context: Context) { view.action = action }
+}
+
+/// The grab area for the line between editor and terminal: a strip laid over the line, half over
+/// the editor and half over the terminal's bar. It's an AppKit view so that it, and not the text
+/// and scroll views on either side, gets the pointer.
+struct SplitHandle: NSViewRepresentable {
+    enum Drag {
+        case began
+        /// How far the pointer has moved down since the drag began, in points.
+        case moved(CGFloat)
+        case ended
+    }
+
+    /// How tall the grab area is.
+    static let height: CGFloat = 10
+
+    let resize: (Drag) -> Void
+
+    final class HandleView: NSView {
+        var resize: (Drag) -> Void = { _ in }
+        private var startY: CGFloat?
+
+        /// The first click into an inactive window grabs the line too.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            startY = event.locationInWindow.y
+            resize(.began)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            // Window coordinates grow upwards.
+            guard let startY else { return }
+            resize(.moved(startY - event.locationInWindow.y))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard startY != nil else { return }
+            startY = nil
+            resize(.ended)
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeUpDown)
+        }
+    }
+
+    func makeNSView(context: Context) -> HandleView { HandleView() }
+    func updateNSView(_ view: HandleView, context: Context) { view.resize = resize }
 }

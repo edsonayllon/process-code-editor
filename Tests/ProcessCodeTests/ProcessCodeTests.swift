@@ -213,6 +213,29 @@ final class TerminalTests: XCTestCase {
 }
 
 final class WorkspaceTests: XCTestCase {
+    @MainActor
+    func testDraggingTheSplitHandleReportsHowFarItMoved() throws {
+        let view = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: 400, height: SplitHandle.height))
+        var drags: [String] = []
+        view.resize = { phase in
+            switch phase {
+            case .began: drags.append("began")
+            case .moved(let down): drags.append("moved \(Int(down))")
+            case .ended: drags.append("ended")
+            }
+        }
+        func event(_ type: NSEvent.EventType, y: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 100, y: y), modifierFlags: [], timestamp: 0,
+                                             windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        view.mouseDown(with: try event(.leftMouseDown, y: 300))
+        view.mouseDragged(with: try event(.leftMouseDragged, y: 340))   // window y grows upwards: 40 up
+        view.mouseDragged(with: try event(.leftMouseDragged, y: 250))   // 50 down
+        view.mouseUp(with: try event(.leftMouseUp, y: 250))
+        XCTAssertEqual(drags, ["began", "moved -40", "moved 50", "ended"])
+        XCTAssertTrue(view.acceptsFirstMouse(for: nil), "the first click into the window grabs it too")
+    }
+
     func testGoToFileRanksNameMatchesFirst() {
         let files = ["Sources/ProcessCode/Git.swift", "docs/git-notes/intro.md", "Sources/ProcessCode/Settings.swift", "README.md"]
         XCTAssertEqual(Workspace.match("git", in: files).first, "Sources/ProcessCode/Git.swift")
