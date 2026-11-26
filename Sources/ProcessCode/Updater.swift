@@ -3,10 +3,13 @@ import Combine
 import Sparkle
 
 /// Gets new versions of the app, with Sparkle: it reads the release feed, and when there is a newer
-/// version it asks, then downloads it, checks its signature, replaces the app and opens it again.
+/// version it downloads it quietly, checks its signature, and puts it in place when the app quits,
+/// so nothing interrupts work and nothing running in a terminal is cut short
+/// (`SUAutomaticallyUpdate` in Info.plist, written by build-app.sh).
 ///
 /// It looks twice only: once as the app opens, and when asked to in Settings or the app menu. Sparkle's
-/// own daily schedule is off (`SUEnableAutomaticChecks` in Info.plist, written by build-app.sh).
+/// own daily schedule is off (`SUEnableAutomaticChecks`). A check that's asked for shows its progress
+/// and offers to install at once.
 ///
 /// Only a released build has a feed to read. One built here, or the bare binary the tests and the
 /// snapshots run, has none, so it never looks and never reaches the network.
@@ -25,7 +28,7 @@ final class AppUpdater: ObservableObject {
     static var hasFeed: Bool { Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil }
 
     /// Called once as the app opens: starts Sparkle and looks for a new version without showing
-    /// anything unless there is one.
+    /// anything. One that's found is downloaded and installed when the app quits.
     func start() {
         guard controller == nil, AppUpdater.hasFeed else { return }
         let controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)

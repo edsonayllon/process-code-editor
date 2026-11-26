@@ -88,7 +88,7 @@ struct SettingsView: View {
                 Text("Updates")
             } footer: {
                 Text(AppUpdater.hasFeed
-                     ? "Process Code also checks each time it opens, and asks before it installs anything."
+                     ? "Process Code also checks each time it opens. A new version downloads quietly and is installed when you quit."
                      : "This copy was built from source, so it doesn't update itself. Rebuild it to get a new version.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)

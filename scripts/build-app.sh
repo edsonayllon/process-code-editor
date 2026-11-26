@@ -117,6 +117,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>SUEnableAutomaticChecks</key><false/>
+  <key>SUAllowsAutomaticUpdates</key><true/>
+  <key>SUAutomaticallyUpdate</key><true/>
   $UPDATE_KEYS
   <key>CFBundleDocumentTypes</key>
   <array>
