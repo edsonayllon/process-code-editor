@@ -196,9 +196,68 @@ final class TerminalTests: XCTestCase {
         XCTAssertEqual(LeanTerminalView.shellEscaped("/a/it's.png"), "'/a/it'\\''s.png'")
     }
 
+    /// A terminal with a test home starts as a new user's would, and a missing agent is found missing there.
+    func testAMissingAgentIsFoundTheWayItsTerminalLooks() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("ProcessCodeTests-home-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            TerminalSession.homeOverride = nil
+            try? FileManager.default.removeItem(at: home)
+        }
+        TerminalSession.homeOverride = home.path
+        let env = TerminalSession.variables(["HOME": "/Users/x", "PATH": "/Users/x/.nvm/bin:/usr/bin", "ZDOTDIR": "/Users/x/.zsh",
+                                             "NVM_DIR": "/Users/x/.nvm"], shell: "/bin/zsh")
+        XCTAssertEqual(env["HOME"], home.path)
+        XCTAssertEqual(env["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin", "nothing found through someone's own PATH")
+        XCTAssertNil(env["ZDOTDIR"])
+        XCTAssertNil(env["NVM_DIR"])
+
+        XCTAssertEqual(TerminalSession.isInstalled("ls", shell: "/bin/zsh", directory: home, environment: env), true)
+        XCTAssertEqual(TerminalSession.isInstalled("no-such-agent-\(UUID().uuidString.prefix(8))", shell: "/bin/zsh",
+                                                   directory: home, environment: env), false)
+    }
+
+    func testEveryPresetHasAnInstallCommandTheShellCanRead() {
+        for agent in Agent.presets {
+            guard let command = agent.installCommand else { return XCTFail("\(agent.name) has no install command") }
+            XCTAssertTrue(command.hasSuffix(agent.command), "\(agent.name) starts once it's installed")
+            XCTAssertEqual(Shell.run("/bin/zsh", ["-n", "-c", command]).status, 0, command)
+        }
+        XCTAssertEqual(Agent(id: "custom", name: "Mine", command: "aider --model x").program, "aider")
+    }
+
     func testAgentStartsInALoginShellAndLeavesAShellBehind() {
         XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: nil), ["-l"])
         XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: Agent.presets[0]), ["-l", "-i", "-c", "claude; exec /bin/zsh -l"])
+    }
+
+    func testRunningProgramsAreNamedShortly() {
+        XCTAssertEqual(TerminalSession.describe(["/opt/homebrew/bin/node", "/opt/homebrew/bin/npm", "run", "dev"]), "npm run dev")
+        XCTAssertEqual(TerminalSession.describe(["python3", "server.py", "--port", "8000"]), "python3 server.py --port 8000")
+        XCTAssertEqual(TerminalSession.describe(["/Users/x/.local/bin/claude", "--continue"]), "claude --continue")
+        XCTAssertEqual(TerminalSession.describe(["cargo", "build", String(repeating: "x", count: 80)]).count, 60)
+        let claude = Agent.presets[0]
+        XCTAssertEqual(TerminalSession.summary(arguments: ["claude"], agent: claude, title: "✳ Claude Code", shell: "zsh"), "Claude Code")
+        XCTAssertEqual(TerminalSession.summary(arguments: ["claude", "--continue"], agent: claude, title: "✳ Fix the login", shell: "zsh"),
+                       "Claude Code (“✳ Fix the login”)")
+        XCTAssertEqual(TerminalSession.summary(arguments: ["npm", "run", "dev"], agent: claude, title: "zsh", shell: "zsh"), "npm run dev",
+                       "something else run in the agent's tab, once the agent has exited, goes by its command")
+        XCTAssertEqual(TerminalSession.summary(arguments: nil, agent: nil, title: "", shell: "zsh"), "a program")
+        let me = TerminalSession.commandLine(of: getpid())
+        XCTAssertEqual(me?.first.map { ($0 as NSString).lastPathComponent }, (CommandLine.arguments[0] as NSString).lastPathComponent)
+        XCTAssertEqual(Workspace.runningWarning(["npm run dev"], closing: "the window"),
+                       "This is still running, and closing the window will end it:\n\n• npm run dev")
+        XCTAssertTrue(Workspace.runningWarning(["npm run dev", "claude"], closing: "the window").hasPrefix("These are still running"))
+    }
+
+    @MainActor
+    func testALiveTerminalNamesWhatsRunningInIt() {
+        let session = TerminalSession(directory: FileManager.default.temporaryDirectory,
+                                      agent: Agent(id: "test", name: "Sleeper", command: "sleep 30"))
+        defer { session.terminate() }
+        let deadline = Date().addingTimeInterval(15)
+        while session.running == nil, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        XCTAssertEqual(session.running, "Sleeper", "the agent goes by its name")
     }
 
     func testEnvironmentDropsTheLaunchersVariables() {
@@ -360,6 +419,9 @@ final class WorkspaceTests: XCTestCase {
         let settings = Settings(defaults: defaults)
         XCTAssertEqual(settings.agent?.command, "claude")
         XCTAssertTrue(settings.startAgentOnOpen)
+        XCTAssertTrue(settings.continueConversation, "carrying on the last conversation is the default")
+        settings.continueConversation = false
+        XCTAssertFalse(Settings(defaults: defaults).continueConversation, "and turning it off is remembered")
         settings.agentID = Agent.customID
         XCTAssertNil(settings.agent, "a custom agent with no command is no agent")
         settings.customAgentCommand = "/opt/bin/hermes --fast"
@@ -649,5 +711,317 @@ final class ProjectTests: XCTestCase {
                              "a name is needed before anything runs")
         XCTAssertThrowsError(try ProjectStore.publish(Project(path: created.path), name: "--", description: "", isPrivate: true).get(),
                              "a name that cleans to nothing is refused before gh runs")
+    }
+}
+
+final class ServiceTests: XCTestCase {
+    private var folder: URL!
+    private var savedDrafts: URL!
+
+    override func setUp() {
+        folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        savedDrafts = Drafts.folder
+        Drafts.folder = folder.appendingPathComponent("drafts")
+    }
+
+    override func tearDown() {
+        Drafts.flush()
+        Drafts.folder = savedDrafts
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    // MARK: Drafts
+
+    func testDraftsAreKeptPerFolderAndRemoved() {
+        let a = Draft(root: "/p/one", path: "/p/one/a.txt", text: "hello", diskDate: Date(timeIntervalSince1970: 100))
+        let b = Draft(root: "/p/two", path: "/p/two/b.txt", text: "other", diskDate: nil)
+        Drafts.write(a)
+        Drafts.write(b)
+        XCTAssertEqual(Drafts.all(root: URL(fileURLWithPath: "/p/one")), [a])
+        Drafts.write(Draft(root: "/p/one", path: "/p/one/a.txt", text: "newer", diskDate: nil))
+        XCTAssertEqual(Drafts.all(root: URL(fileURLWithPath: "/p/one")).map(\.text), ["newer"], "a newer draft replaces the older")
+        Drafts.remove(for: URL(fileURLWithPath: "/p/one/a.txt"))
+        XCTAssertEqual(Drafts.all(root: URL(fileURLWithPath: "/p/one")), [])
+        XCTAssertEqual(Drafts.all(root: URL(fileURLWithPath: "/p/two")), [b])
+    }
+
+    @MainActor
+    func testRestoredDraftIsUnsavedAndSavingForgetsIt() throws {
+        let file = folder.appendingPathComponent("a.txt")
+        try "on disk".write(to: file, atomically: true, encoding: .utf8)
+        let date = try XCTUnwrap(file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        let document = Document(url: file)
+        document.draftRoot = folder
+        document.restore(Draft(root: folder.path, path: file.path, text: "typed", diskDate: date))
+        XCTAssertEqual(document.text, "typed")
+        XCTAssertTrue(document.isDirty)
+        XCTAssertFalse(document.changedOnDisk, "the file hasn't changed since the draft was kept")
+        document.keepDraft()
+        XCTAssertEqual(Drafts.all(root: folder).map(\.text), ["typed"])
+        try document.save()
+        XCTAssertEqual(Drafts.all(root: folder), [])
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "typed")
+    }
+
+    @MainActor
+    func testDraftOfAFileChangedSinceSaysSo() throws {
+        let file = folder.appendingPathComponent("a.txt")
+        try "changed by the agent".write(to: file, atomically: true, encoding: .utf8)
+        let document = Document(url: file)
+        document.restore(Draft(root: folder.path, path: file.path, text: "typed", diskDate: Date(timeIntervalSince1970: 0)))
+        XCTAssertTrue(document.isDirty)
+        XCTAssertTrue(document.changedOnDisk, "Keep Mine or Reload decides")
+    }
+
+    @MainActor
+    func testDraftThatMatchesTheFileIsDropped() throws {
+        let file = folder.appendingPathComponent("a.txt")
+        try "same".write(to: file, atomically: true, encoding: .utf8)
+        let document = Document(url: file)
+        document.restore(Draft(root: folder.path, path: file.path, text: "same", diskDate: nil))
+        XCTAssertFalse(document.isDirty)
+    }
+
+    @MainActor
+    func testDraftOfADeletedFileComesBackAndSavingPutsItBack() throws {
+        let file = folder.appendingPathComponent("gone.txt")
+        let draft = Draft(root: folder.path, path: file.path, text: "still here", diskDate: nil)
+        let document = Document(url: file, draft: draft.text)
+        document.restore(draft)
+        XCTAssertEqual(document.kind, .text)
+        XCTAssertTrue(document.isDirty)
+        XCTAssertFalse(document.changedOnDisk)
+        try document.save()
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "still here")
+    }
+
+    // MARK: A whole window
+
+    @MainActor
+    func testReopeningAFolderBringsBackUnsavedTextAndTrashCanBeUndone() throws {
+        // A git step that fails would leave a file Trash asks about, in a dialog nobody can answer.
+        continueAfterFailure = false
+        let root = folder.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("a.txt")
+        try "committed".write(to: file, atomically: true, encoding: .utf8)
+        for arguments in [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "first"]] {
+            XCTAssertEqual(Shell.run("/usr/bin/env", ["git"] + arguments, in: root).status, 0)
+        }
+        let date = try XCTUnwrap(file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        Drafts.write(Draft(root: root.path, path: file.path, text: "typed", diskDate: date))
+        Drafts.write(Draft(root: root.path, path: root.appendingPathComponent("gone.txt").path, text: "kept", diskDate: nil))
+
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        XCTAssertEqual(workspace.documents.map(\.name).sorted(), ["a.txt", "gone.txt"])
+        XCTAssertTrue(workspace.documents.allSatisfy(\.isDirty))
+        XCTAssertEqual(workspace.documents.first { $0.name == "a.txt" }?.text, "typed")
+
+        // A committed file goes without a question, and Undo puts it back.
+        let other = root.appendingPathComponent("b.txt")
+        try "b".write(to: other, atomically: true, encoding: .utf8)
+        _ = Shell.run("/usr/bin/env", ["git", "add", "b.txt"], in: root)
+        XCTAssertEqual(Shell.run("/usr/bin/env", ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "b"], in: root).status, 0)
+        workspace.trash(other)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(workspace.fileUndo.undoActionName, "Move to Trash")
+        workspace.fileUndo.undo()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.path))
+        XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "b")
+    }
+
+    // MARK: Trash
+
+    func testTrashAsksOnlyWhenSomethingWouldBeLost() {
+        let status = GitStatus.parse(["## main", " M src/edited.swift", "?? notes/", "A  added.txt", "!! .env", "!! src/build/"]
+            .joined(separator: "\0") + "\0")
+        XCTAssertNil(Workspace.trashWarning(path: "src/clean.swift", isDirectory: false, status: status, unsaved: []))
+        XCTAssertNil(Workspace.trashWarning(path: "docs", isDirectory: true, status: status, unsaved: []))
+        XCTAssertEqual(Workspace.trashWarning(path: "src/edited.swift", isDirectory: false, status: status, unsaved: [])?
+            .components(separatedBy: "\n\n").first, "It has changes that aren't committed.")
+        XCTAssertTrue(Workspace.trashWarning(path: "notes/todo.md", isDirectory: false, status: status, unsaved: [])!.hasPrefix("It isn't committed"))
+        XCTAssertTrue(Workspace.trashWarning(path: "added.txt", isDirectory: false, status: status, unsaved: [])!.hasPrefix("It isn't committed"))
+        XCTAssertTrue(Workspace.trashWarning(path: ".env", isDirectory: false, status: status, unsaved: [])!.hasPrefix("Git ignores it"))
+        let folder = Workspace.trashWarning(path: "src", isDirectory: true, status: status, unsaved: [])!
+        XCTAssertTrue(folder.contains("1 file in it has changes that aren't committed."))
+        XCTAssertTrue(folder.contains("Git ignores some of what's in it (build/)"))
+        XCTAssertTrue(Workspace.trashWarning(path: "src/clean.swift", isDirectory: false, status: status, unsaved: ["clean.swift"])!
+            .hasPrefix("“clean.swift” has unsaved changes"))
+        XCTAssertTrue(Workspace.trashWarning(path: "a.txt", isDirectory: false, status: GitStatus(), unsaved: [])!.hasPrefix("This folder isn't a git repository"))
+
+        let more = GitStatus.parse(["## main", " M vendor/lib", "?? app/new.swift", " M app/old.swift"].joined(separator: "\0") + "\0")
+        XCTAssertEqual(Workspace.trashWarning(path: "vendor/lib", isDirectory: true, status: more, unsaved: [])?
+            .components(separatedBy: "\n\n").first, "It has changes that aren't committed.", "a submodule with changes in it")
+        let app = Workspace.trashWarning(path: "app", isDirectory: true, status: more, unsaved: [])!
+        XCTAssertTrue(app.contains("Some of what's in it isn't committed (new.swift), so the Trash will hold the only copy of that."))
+        XCTAssertTrue(app.contains("1 file in it has changes that aren't committed."))
+    }
+
+    func testADraftThatCantBeWrittenIsReported() throws {
+        let blocked = folder.appendingPathComponent("blocked")
+        try "a file where the folder would go".write(to: blocked, atomically: true, encoding: .utf8)
+        Drafts.folder = blocked.appendingPathComponent("drafts")
+        XCTAssertFalse(Drafts.writeNow(Draft(root: "/p", path: "/p/a.txt", text: "x", diskDate: nil)))
+        Drafts.folder = folder.appendingPathComponent("drafts")
+        XCTAssertTrue(Drafts.writeNow(Draft(root: "/p", path: "/p/a.txt", text: "x", diskDate: nil)))
+    }
+
+    @MainActor
+    func testClosingAWindowKeepsUnsavedTextOrSaysItCant() throws {
+        let file = folder.appendingPathComponent("a.txt")
+        try "on disk".write(to: file, atomically: true, encoding: .utf8)
+        let document = Document(url: file)
+        document.restore(Draft(root: folder.path, path: file.path, text: "typed", diskDate: nil))
+        XCTAssertFalse(document.keepDraft(now: true), "with nowhere to keep it, the window asks about it")
+        document.draftRoot = folder
+        XCTAssertTrue(document.keepDraft(now: true))
+        XCTAssertEqual(Drafts.all(root: folder).map(\.text), ["typed"])
+    }
+
+    /// A stand-in for gh, first on the PATH: signing in prints a code and waits a moment, then
+    /// succeeds or fails; everything else succeeds.
+    private func fakeGitHubCLI(signInSucceeds: Bool) throws -> String {
+        let bin = folder.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let script = """
+        #!/bin/sh
+        if [ "$1 $2" = "auth login" ]; then
+          echo "! One-time code (AB12-CD34) copied to clipboard"
+          sleep 1
+          \(signInSucceeds ? "exit 0" : "echo 'error: the code expired'; exit 1")
+        fi
+        [ "$1 $2" = "repo list" ] && echo "[]"
+        exit 0
+        """
+        let gh = bin.appendingPathComponent("gh")
+        try script.write(to: gh, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gh.path)
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        setenv("PATH", bin.path + ":" + path, 1)
+        return path
+    }
+
+    @MainActor
+    private func signIn(succeeds: Bool) throws -> (store: ProjectStore, opened: [URL], copied: [String]) {
+        let oldPath = try fakeGitHubCLI(signInSucceeds: succeeds)
+        defer { setenv("PATH", oldPath, 1) }
+        let store = ProjectStore(defaults: UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!)
+        store.githubSetup = .signedOut
+        var opened: [URL] = [], copied: [String] = []
+        store.openPage = { opened.append($0) }
+        store.copyText = { copied.append($0) }
+        store.signInToGitHub()
+        var sawCode = false
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            if store.setupStep == .signingIn(code: "AB12-CD34") { sawCode = true }
+            if case .failed = store.setupStep { break }
+            if store.setupStep == .idle, store.githubSetup == nil { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(sawCode, "the code is shown while GitHub waits for it")
+        return (store, opened, copied)
+    }
+
+    @MainActor
+    func testSigningInShowsTheCodeOpensGitHubAndClearsTheNote() throws {
+        let result = try signIn(succeeds: true)
+        XCTAssertEqual(result.opened, [ProjectStore.deviceLoginPage])
+        XCTAssertEqual(result.copied, ["AB12-CD34"])
+        XCTAssertEqual(result.store.setupStep, .idle)
+        XCTAssertNil(result.store.githubSetup, "signed in, the note goes")
+    }
+
+    @MainActor
+    func testAFailedSignInSaysWhy() throws {
+        let result = try signIn(succeeds: false)
+        guard case .failed(let message) = result.store.setupStep else { return XCTFail("\(result.store.setupStep)") }
+        XCTAssertTrue(message.contains("the code expired"))
+        XCTAssertEqual(result.store.githubSetup, .signedOut)
+    }
+
+    func testSignInReadsTheOneTimeCode() {
+        XCTAssertEqual(ProjectStore.deviceCode(in: "! One-time code (AB12-CD34) copied to clipboard\nOpen this URL…"), "AB12-CD34")
+        XCTAssertEqual(ProjectStore.deviceCode(in: "! First copy your one-time code: 9F3E-1A2B\n"), "9F3E-1A2B", "as older versions say it")
+        XCTAssertNil(ProjectStore.deviceCode(in: "Open this URL to continue in your web browser: https://github.com/login/device"))
+        XCTAssertEqual(ProjectStore.lastLines(of: "a\nb\nc\nd\n", count: 2), "c\nd")
+    }
+
+    /// A clone or publish that fails for want of a sign-in says so, so its sheet can offer the button.
+    func testCloneAndPublishFailuresSayWhenGitHubNeedsSigningIn() throws {
+        let bin = folder.appendingPathComponent("signed-out-bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let gh = bin.appendingPathComponent("gh")
+        try "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n"
+            .write(to: gh, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gh.path)
+        let oldPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        setenv("PATH", bin.path + ":" + oldPath, 1)
+        defer { setenv("PATH", oldPath, 1) }
+
+        let root = folder.appendingPathComponent("projects").path
+        guard case .failure(let clone) = ProjectStore.clone("owner/app", into: root) else { return XCTFail("the clone should fail") }
+        XCTAssertEqual(clone.setup, .signedOut)
+
+        let local = folder.appendingPathComponent("local")
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        Shell.run("/usr/bin/env", ["git", "init", "-q"], in: local)
+        guard case .failure(let publish) = ProjectStore.publish(Project(path: local.path), name: "local", description: "", isPrivate: true)
+        else { return XCTFail("the publish should fail") }
+        XCTAssertEqual(publish.setup, .signedOut)
+
+        guard case .failure(let byURL) = ProjectStore.clone("file:///nowhere/at/all.git", into: root) else { return XCTFail() }
+        XCTAssertNil(byURL.setup, "a clone by URL uses git, not GitHub's sign-in")
+    }
+
+    func testProjectTrashCountsUnsavedDrafts() {
+        let project = Project(path: "/p/app")
+        XCTAssertTrue(ProjectStore.trashWarning(for: project, drafts: 2).hasPrefix("2 files in it have unsaved changes"))
+    }
+
+    // MARK: Errors
+
+    func testFileErrorsSayWhatToDo() {
+        XCTAssertTrue(Workspace.explain(CocoaError(.fileWriteOutOfSpace)).hasPrefix("The disk is full."))
+        XCTAssertTrue(Workspace.explain(CocoaError(.fileWriteFileExists)).contains("Choose another name"))
+        XCTAssertTrue(Workspace.explain(CocoaError(.fileWriteNoPermission)).contains("Privacy & Security"))
+    }
+
+    func testGitHubFailuresKeepWhatTheToolSaidAndAddTheWayOut() {
+        let signedOut = Shell.Result(status: 4, output: "You are not logged into any GitHub hosts. To log in, run: gh auth login\n")
+        XCTAssertEqual(ProjectStore.githubSetup(from: signedOut), .signedOut)
+        let message = ProjectStore.explain(signedOut, tool: "gh")
+        XCTAssertTrue(message.hasPrefix("You are not logged into any GitHub hosts."), "what gh said comes first")
+        XCTAssertTrue(message.hasSuffix("Run gh auth login in a terminal, then try again."))
+        XCTAssertEqual(ProjectStore.githubSetup(from: Shell.Result(status: 127, output: "env: gh: No such file or directory")), .notInstalled)
+        XCTAssertNil(ProjectStore.githubSetup(from: Shell.Result(status: 1, output: "error connecting to api.github.com")),
+                     "a network failure isn't a setup problem")
+        XCTAssertTrue(ProjectStore.explain(Shell.Result(status: 1, output: "GraphQL: Name already exists on this account (createRepository)"), tool: "gh")
+            .contains("Choose another name"))
+        XCTAssertEqual(ProjectStore.explain(Shell.Result(status: 1, output: "something new"), tool: "gh"), "something new")
+        XCTAssertEqual(ProjectStore.explain(Shell.Result(status: 1, output: ""), tool: "git"), "git stopped without saying why.")
+    }
+
+    // MARK: Agent
+
+    func testClaudeCarriesOnOnlyWhenThereIsAConversation() throws {
+        let home = folder.appendingPathComponent("home")
+        let project = URL(fileURLWithPath: "/Users/x/My Projects/app.v2")
+        XCTAssertEqual(Agent.claudeFolderName(for: project.path), "-Users-x-My-Projects-app-v2")
+        let claude = Agent.presets[0]
+        XCTAssertFalse(claude.hasConversation(in: project, home: home.path))
+        let store = home.appendingPathComponent(".claude/projects/-Users-x-My-Projects-app-v2")
+        try FileManager.default.createDirectory(at: store.appendingPathComponent("memory"), withIntermediateDirectories: true)
+        XCTAssertFalse(claude.hasConversation(in: project, home: home.path), "a folder of memories isn't a conversation")
+        try Data().write(to: store.appendingPathComponent("1234.jsonl"))
+        XCTAssertTrue(claude.hasConversation(in: project, home: home.path))
+        XCTAssertFalse(Agent.presets[1].hasConversation(in: project, home: home.path), "Codex starts fresh")
+        XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: claude, resume: true),
+                       ["-l", "-i", "-c", "claude --continue; exec /bin/zsh -l"])
+        XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: Agent.presets[1], resume: true),
+                       ["-l", "-i", "-c", "codex; exec /bin/zsh -l"])
     }
 }
