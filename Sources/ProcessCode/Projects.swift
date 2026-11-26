@@ -20,6 +20,8 @@ struct Project: Identifiable, Equatable {
     /// move to the Trash (`inspectedForTrash`), since it costs two more git runs.
     var unpushed = 0
     var stashes = 0
+    /// Counting those failed, so what only exists in this folder isn't known.
+    var uncounted = false
     /// Whether git has been read yet. Until then the remote is unknown, not missing.
     var isRead = false
     var lastCommit: Date?
@@ -110,15 +112,26 @@ struct Project: Identifiable, Equatable {
         return project
     }
 
-    /// `inspected()`, plus what only exists in this folder: commits on any branch that no remote
-    /// has (including a branch whose upstream was deleted), and stashes. Runs off the main thread.
+    /// `inspected()`, plus what only exists in this folder: commits on any branch, or on a detached
+    /// HEAD, that no remote-tracking branch has, and stashes. It goes by what this Mac last fetched, so
+    /// a branch deleted on GitHub and not yet pruned here still counts as pushed. Runs off the main thread.
     func inspectedForTrash() -> Project {
         var project = inspected()
         guard project.isRead else { return project }
-        let count = Shell.run("/usr/bin/env", ["git", "rev-list", "--count", "--branches", "--not", "--remotes"], in: url, mergingErrors: false)
-        project.unpushed = Int(count.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        // A repository with no commits has no HEAD to count from.
+        let heads = project.hasCommits ? ["HEAD", "--branches"] : ["--branches"]
+        let count = Shell.run("/usr/bin/env", ["git", "rev-list", "--count"] + heads + ["--not", "--remotes"], in: url, mergingErrors: false)
         let stashes = Shell.run("/usr/bin/env", ["git", "stash", "list"], in: url, mergingErrors: false)
-        project.stashes = stashes.status == 0 ? stashes.output.split(separator: "\n").count : 0
+        if count.status == 0, let unpushed = Int(count.output.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            project.unpushed = unpushed
+        } else {
+            project.uncounted = true
+        }
+        if stashes.status == 0 {
+            project.stashes = stashes.output.split(separator: "\n").count
+        } else {
+            project.uncounted = true
+        }
         return project
     }
 
@@ -386,6 +399,9 @@ final class ProjectStore: ObservableObject {
             }
             if project.stashes > 0 {
                 risks.append(project.stashes == 1 ? "It has 1 stash." : "It has \(project.stashes) stashes.")
+            }
+            if project.uncounted {
+                risks.append("Git couldn't count its commits that aren't on GitHub or its stashes, so it may hold work that's nowhere else.")
             }
         }
         let base = project.isPublished

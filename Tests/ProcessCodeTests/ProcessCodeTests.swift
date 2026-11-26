@@ -454,6 +454,23 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(project.unpushed, 2)
         XCTAssertEqual(project.stashes, 1)
         XCTAssertTrue(ProjectStore.trashWarning(for: project).contains("2 commits that aren't on GitHub"))
+
+        git("checkout", "--detach", in: repo)
+        git("commit", "--allow-empty", "-m", "on no branch", in: repo)
+        XCTAssertEqual(Project(path: repo.path).inspectedForTrash().unpushed, 3, "a commit on a detached HEAD counts too")
+
+        // A ref to a missing object: git status still works, but the count fails.
+        try "0123456789abcdef0123456789abcdef01234567\n".write(to: repo.appendingPathComponent(".git/refs/heads/broken"),
+                                                               atomically: true, encoding: .utf8)
+        let broken = Project(path: repo.path).inspectedForTrash()
+        XCTAssertTrue(broken.isRead)
+        XCTAssertTrue(broken.uncounted)
+        XCTAssertTrue(ProjectStore.trashWarning(for: broken).contains("couldn't count"))
+
+        let empty = Project(path: try ProjectStore.create(name: "empty", readme: false, in: base.path).get().path).inspectedForTrash()
+        XCTAssertFalse(empty.hasCommits)
+        XCTAssertFalse(empty.uncounted, "no commits yet is nothing to count, not a failure")
+        XCTAssertEqual(empty.unpushed, 0)
     }
 
     @MainActor
