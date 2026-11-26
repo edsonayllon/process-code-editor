@@ -538,7 +538,9 @@ final class ProjectStore: ObservableObject {
         let intro = "GitHub made the repository and set it as origin, but the push didn't finish: \(output)\n\n"
         // read(status:) names a detached HEAD "detached"; there's no branch to push until one is made.
         guard let branch, branch != "detached" else {
-            return intro + "You're not on a branch. Make one and push it from the terminal: git switch -c main && git push -u origin main"
+            // Any name will do, but not one that's taken, as main usually is.
+            return intro + "You're not on a branch. Make one and push it from the terminal: "
+                + "git switch -c <new-branch> && git push -u origin <new-branch>"
         }
         return intro + "Push it from the terminal: git push -u origin \(branch)"
     }
