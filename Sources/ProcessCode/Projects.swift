@@ -22,6 +22,9 @@ struct Project: Identifiable, Equatable {
     var stashes = 0
     /// Counting those failed, so what only exists in this folder isn't known.
     var uncounted = false
+    /// A remote couldn't be asked which of its branches are gone, so a branch deleted there since
+    /// the last fetch may still count as pushed.
+    var remoteUnchecked = false
     /// Whether git has been read yet. Until then the remote is unknown, not missing.
     var isRead = false
     var lastCommit: Date?
@@ -113,14 +116,23 @@ struct Project: Identifiable, Equatable {
     }
 
     /// `inspected()`, plus what only exists in this folder: commits on any branch, or on a detached
-    /// HEAD, that no remote-tracking branch has, and stashes. It goes by what this Mac last fetched, so
-    /// a branch deleted on GitHub and not yet pruned here still counts as pushed. Runs off the main thread.
+    /// HEAD, that no branch on a remote has, and stashes. Each remote is asked which branches it has
+    /// deleted since the last fetch, and those don't count as pushed. Runs off the main thread, and
+    /// can take as long as a round trip to each remote.
     func inspectedForTrash() -> Project {
         var project = inspected()
         guard project.isRead else { return project }
+        var gone: [String] = []
+        let remotes = Shell.run("/usr/bin/env", ["git", "remote"], in: url, mergingErrors: false)
+        for remote in remotes.output.split(separator: "\n").map(String.init) where remotes.status == 0 {
+            let pruned = Shell.run("/usr/bin/env", ["git", "remote", "prune", "--dry-run", remote], in: url,
+                                   mergingErrors: false, timeout: Project.remoteTimeout)
+            if pruned.status == 0 { gone += Project.goneBranches(inPruneOutput: pruned.output) } else { project.remoteUnchecked = true }
+        }
         // A repository with no commits has no HEAD to count from.
         let heads = project.hasCommits ? ["HEAD", "--branches"] : ["--branches"]
-        let count = Shell.run("/usr/bin/env", ["git", "rev-list", "--count"] + heads + ["--not", "--remotes"], in: url, mergingErrors: false)
+        let pushed = gone.map { "--exclude=" + $0 } + ["--remotes"]
+        let count = Shell.run("/usr/bin/env", ["git", "rev-list", "--count"] + heads + ["--not"] + pushed, in: url, mergingErrors: false)
         let stashes = Shell.run("/usr/bin/env", ["git", "stash", "list"], in: url, mergingErrors: false)
         if count.status == 0, let unpushed = Int(count.output.trimmingCharacters(in: .whitespacesAndNewlines)) {
             project.unpushed = unpushed
@@ -133,6 +145,18 @@ struct Project: Identifiable, Equatable {
             project.uncounted = true
         }
         return project
+    }
+
+    /// How long a remote may take to say which branches it has.
+    static let remoteTimeout: TimeInterval = 10
+
+    /// The remote-tracking branches `git remote prune --dry-run` would remove ("origin/feature"),
+    /// which are gone from the remote.
+    static func goneBranches(inPruneOutput output: String) -> [String] {
+        output.split(separator: "\n").compactMap { line in
+            guard let marker = line.range(of: "[would prune] ") else { return nil }
+            return line[marker.upperBound...].trimmingCharacters(in: .whitespaces)
+        }
     }
 
     /// "now", "5m", "3h", "2d", "6w", "4mo", "2y".
@@ -409,6 +433,8 @@ final class ProjectStore: ObservableObject {
             }
             if project.uncounted {
                 risks.append("Git couldn't count its commits that aren't on GitHub or its stashes, so it may hold work that's nowhere else.")
+            } else if project.remoteUnchecked {
+                risks.append("GitHub couldn't be reached, so commits on a branch deleted there since this Mac last fetched aren't counted.")
             }
         }
         let base = project.isPublished

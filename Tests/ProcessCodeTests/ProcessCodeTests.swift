@@ -443,7 +443,8 @@ final class ProjectTests: XCTestCase {
     }
 
     /// Work that only exists in the folder: a branch never pushed, a branch whose upstream was
-    /// deleted, and a stash, all while the current branch is in step with its remote.
+    /// deleted (from here, and on the remote alone), and a stash, all while the current branch is in
+    /// step with its remote.
     func testTrashCountsWorkOnEveryBranchAndStash() throws {
         let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
@@ -466,18 +467,35 @@ final class ProjectTests: XCTestCase {
         git("switch", "-c", "local", in: repo)
         git("commit", "--allow-empty", "-m", "never pushed", in: repo)
         git("switch", "main", in: repo)
+        // Deleted on the remote but still fetched here, like a PR branch GitHub removed after merging.
+        git("switch", "-c", "feature/stale", in: repo)
+        git("commit", "--allow-empty", "-m", "pushed, then deleted on the remote alone", in: repo)
+        git("push", "-u", "origin", "feature/stale", in: repo)
+        git("branch", "-D", "feature/stale", in: remote)
+        git("switch", "main", in: repo)
+        XCTAssertEqual(Shell.run("/usr/bin/env", ["git", "rev-parse", "--verify", "-q", "origin/feature/stale"], in: repo).status, 0,
+                       "this Mac still has the remote branch")
         try "edit".write(to: repo.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
         git("stash", in: repo)
 
         let project = Project(path: repo.path).inspectedForTrash()
         XCTAssertEqual(project.ahead, 0, "the current branch alone looks safe")
-        XCTAssertEqual(project.unpushed, 2)
+        XCTAssertEqual(project.unpushed, 3)
         XCTAssertEqual(project.stashes, 1)
-        XCTAssertTrue(ProjectStore.trashWarning(for: project).contains("2 commits that aren't on GitHub"))
+        XCTAssertFalse(project.remoteUnchecked)
+        XCTAssertTrue(ProjectStore.trashWarning(for: project).contains("3 commits that aren't on GitHub"))
 
         git("checkout", "--detach", in: repo)
         git("commit", "--allow-empty", "-m", "on no branch", in: repo)
-        XCTAssertEqual(Project(path: repo.path).inspectedForTrash().unpushed, 3, "a commit on a detached HEAD counts too")
+        XCTAssertEqual(Project(path: repo.path).inspectedForTrash().unpushed, 4, "a commit on a detached HEAD counts too")
+
+        // A remote that can't be reached: the count goes by what was last fetched, and says so.
+        git("remote", "add", "away", base.appendingPathComponent("missing.git").path, in: repo)
+        let away = Project(path: repo.path).inspectedForTrash()
+        XCTAssertTrue(away.remoteUnchecked)
+        XCTAssertEqual(away.unpushed, 4)
+        XCTAssertTrue(ProjectStore.trashWarning(for: away).contains("couldn't be reached"))
+        git("remote", "remove", "away", in: repo)
 
         // A ref to a missing object: git status still works, but the count fails.
         try "0123456789abcdef0123456789abcdef01234567\n".write(to: repo.appendingPathComponent(".git/refs/heads/broken"),
