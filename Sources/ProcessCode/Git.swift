@@ -181,7 +181,13 @@ enum Shell {
         process.standardError = errorPipe
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return Result(status: -1, output: error.localizedDescription) }
-        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        // Whether the watchdog stopped it, as opposed to a crash or a signal from elsewhere.
+        let stopped = Flag()
+        let watchdog = DispatchWorkItem {
+            guard process.isRunning else { return }
+            stopped.set()
+            process.terminate()
+        }
         if let timeout { DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog) }
         // Drain both pipes at once so a chatty stderr can't block the child.
         var errorData = Data()
@@ -197,11 +203,19 @@ enum Shell {
         group.wait()
         process.waitUntilExit()
         watchdog.cancel()
-        if let timeout, process.terminationReason == .uncaughtSignal {
+        if let timeout, stopped.isSet, process.terminationReason == .uncaughtSignal {
             let name = arguments.first.map { tool.hasSuffix("/env") ? $0 : tool } ?? tool
             return Result(status: 124, output: "\(name) didn't answer within \(Int(timeout)) seconds and was stopped.")
         }
         let failedApart = !mergingErrors && process.terminationStatus != 0
         return Result(status: process.terminationStatus, output: String(decoding: failedApart ? errorData : data, as: UTF8.self))
     }
+}
+
+/// A yes-or-no that one thread sets and another reads.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.withLock { value = true } }
+    var isSet: Bool { lock.withLock { value } }
 }

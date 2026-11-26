@@ -408,6 +408,8 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(result.status, 124)
         XCTAssertLessThan(Date().timeIntervalSince(start), 5)
         XCTAssertEqual(Shell.run("/bin/echo", ["hi"], timeout: 5).output, "hi\n", "a quick tool is untouched")
+        XCTAssertNotEqual(Shell.run("/bin/sh", ["-c", "kill -TERM $$"], timeout: 30).status, 124,
+                          "a tool that dies of a signal by itself isn't reported as too slow")
     }
 
     func testOnlyARepositoryHoldingNoOtherProjectGoesToTheTrash() {
