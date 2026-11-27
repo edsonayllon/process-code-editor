@@ -93,7 +93,7 @@ open -a "Process Code" ~/Documents/GitHub/my-project
 ## Release
 
 ```sh
-gh pr create --base release --head main --fill   # bring main into release, then review and merge the PR
+gh pr create --base release --head main --fill   # bring main into release; the PR shows the coming version and notes
 git switch release && git pull
 ./scripts/release.sh --dry-run   # the version and notes the commits since the last tag would give
 ./scripts/release.sh             # test, build, notarise, tag vX.Y.Z and publish the DMG and its feed on GitHub
@@ -106,7 +106,9 @@ other branch or in CI. The commit messages since the last tag
 decide the version: a `fix:` makes a patch, a `feat:` a minor and a breaking change a major; with only `docs:`,
 `chore:` and the like there is nothing to release. It needs Node 24.10 or later and a logged-in GitHub CLI.
 Work lands on `main` and reaches `release` only through a pull request from `main`; `release` has to be clean
-and match GitHub. The website's download button points at the latest release, so it needs no
+and match GitHub. On that pull request a GitHub Actions check (`.github/workflows/release-preview.yml`, about a
+minute on Linux) runs `scripts/release-preview.sh` and comments the version and notes the merge will release. It
+only reads commits; nothing is built or published there. The website's download button points at the latest release, so it needs no
 change afterwards.
 
 The build step is `./scripts/build-app.sh --release`, which builds the app, signs it with a Developer ID Application certificate,
