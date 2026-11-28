@@ -23,10 +23,12 @@ final class Document: ObservableObject, Identifiable {
 
     static let maximumTextSize = 8_000_000
 
-    let url: URL
+    /// Where the file is. A rename that keeps its kind moves the tab along with it (`follow`).
+    private(set) var url: URL
     let kind: Kind
     let language: Language
-    var id: String { url.path }
+    /// Stays the same when the file is renamed, so the tab keeps its place.
+    let id = UUID().uuidString
     var name: String { url.lastPathComponent }
 
     @Published var isDirty = false
@@ -139,6 +141,21 @@ final class Document: ObservableObject, Identifiable {
         if now { return Drafts.writeNow(draft) }
         Drafts.write(draft)
         return true
+    }
+
+    /// Whether the tab can follow its file to `newURL` as it is: a text file whose name still makes
+    /// it the same kind of file. Another kind (a new extension, a picture, a video) opens afresh.
+    func canFollow(to newURL: URL) -> Bool {
+        kind == .text && editor != nil
+            && newURL.pathExtension.lowercased() == url.pathExtension.lowercased()
+            && Language.forFile(newURL).name == language.name
+    }
+
+    /// Follows the file to where a rename moved it, keeping the text, its undo history and the tab.
+    func follow(to newURL: URL) {
+        objectWillChange.send()
+        url = newURL
+        if isTeX { pdfURL = Latex.existingPDF(for: newURL) }
     }
 
     /// Forgets the draft: the text was saved, reloaded or let go.

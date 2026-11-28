@@ -402,6 +402,17 @@ final class Workspace: ObservableObject {
         documentObservers[document.id] = document.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
+    /// Puts `new` in the tab `old` had, in its pane.
+    private func replace(_ old: Document, with new: Document) {
+        guard let index = documents.firstIndex(where: { $0 === old }) else { return }
+        add(new)
+        documents.removeLast()
+        documents[index] = new
+        documentObservers[old.id] = nil
+        if activeDocumentID == old.id { activeDocumentID = new.id }
+        if sideDocumentID == old.id { sideDocumentID = new.id }
+    }
+
     /// Opens a file in the main pane, or `toSide`, beside the file that's there.
     func open(_ url: URL, line: Int? = nil, toSide: Bool = false) {
         let url = url.standardizedFileURL
@@ -692,8 +703,9 @@ final class Workspace: ObservableObject {
 
     /// Renames a file or folder. Its open files with unsaved changes are asked about first, while
     /// they still have their names (a Save goes to the file being renamed, not a new one under the
-    /// old name), and nothing closes until every answer is in and the move has worked. A Cancel or
-    /// a failed move leaves every tab as it was. The open files then reopen under the new name.
+    /// old name), and nothing changes until every answer is in and the move has worked. A Cancel or
+    /// a failed move leaves every tab as it was. Then each open file's tab follows it to the new
+    /// name in its place, with its undo history, or opens afresh there if it's now another kind.
     func rename(_ url: URL, to name: String) {
         let destination = url.deletingLastPathComponent().appendingPathComponent(name)
         let open = documents(under: url)
@@ -712,12 +724,21 @@ final class Workspace: ObservableObject {
             Workspace.report(error, title: "Couldn't rename “\(url.lastPathComponent)”")
             return
         }
-        for document in discarded { document.discardDraft() }
-        let closed = open.map(\.url)
-        open.forEach(remove)
-        for old in closed {
-            self.open(URL(fileURLWithPath: destination.path + old.path.dropFirst(url.path.count)))
+        for document in open {
+            let moved = URL(fileURLWithPath: destination.path + document.url.path.dropFirst(url.path.count))
+            let wasDiscarded = discarded.contains { $0 === document }
+            if wasDiscarded { document.discardDraft() }
+            if document.canFollow(to: moved) {
+                document.follow(to: moved)
+                if wasDiscarded { document.reload() }
+            } else {
+                replace(document, with: Document(url: moved))
+            }
         }
+        if let selected = selectedPath, selected == url.path || selected.hasPrefix(url.path + "/") {
+            selectedPath = destination.path + selected.dropFirst(url.path.count)
+        }
+        saveState()
         reloadTree()
     }
 

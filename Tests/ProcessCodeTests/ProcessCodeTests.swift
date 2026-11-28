@@ -1303,6 +1303,36 @@ final class ServiceTests: XCTestCase {
                        "nothing is left under the old name")
     }
 
+    /// A rename keeps each open file's tab in its place, with its text's undo history and the side
+    /// pane; one whose new name makes it another kind of file opens afresh in the same place.
+    @MainActor
+    func testARenameKeepsTheTabsInTheirPlaces() throws {
+        let root = folder.appendingPathComponent("rename-keeps")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        let files = ["src/a.txt", "other.txt", "src/b.txt"].map { root.appendingPathComponent($0) }
+        for file in files { try "x".write(to: file, atomically: true, encoding: .utf8) }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        files.forEach { workspace.open($0) }
+        workspace.open(files[2], toSide: true)
+        let before = workspace.documents, side = workspace.sideDocumentID
+        let editor = try XCTUnwrap(before[0].editor)
+        editor.textView.insertText("!", replacementRange: NSRange(location: 1, length: 0))
+        XCTAssertTrue(workspace.save(before[0]))
+
+        workspace.rename(root.appendingPathComponent("src"), to: "lib")
+        XCTAssertTrue(workspace.documents.elementsEqual(before, by: ===), "the same tabs, in the same order")
+        XCTAssertEqual(workspace.documents.map { workspace.relativePath(of: $0.url) }, ["lib/a.txt", "other.txt", "lib/b.txt"])
+        XCTAssertEqual(workspace.sideDocumentID, side)
+        editor.textView.undo(nil)
+        XCTAssertEqual(editor.text, "x", "the typing before the rename can still be undone")
+
+        workspace.rename(root.appendingPathComponent("lib/a.txt"), to: "a.md")
+        XCTAssertFalse(workspace.documents[0] === before[0], "Markdown is another kind of file, with a preview")
+        XCTAssertEqual(workspace.documents.map { workspace.relativePath(of: $0.url) }, ["lib/a.md", "other.txt", "lib/b.txt"])
+        XCTAssertEqual(workspace.sideDocumentID, side)
+    }
+
     /// A rename that can't be done leaves the tabs as they were: the same documents, in the same
     /// order, with the side pane and each one's undo history.
     @MainActor
