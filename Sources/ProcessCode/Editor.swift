@@ -145,8 +145,10 @@ final class CodeTextView: NSTextView {
     private func history(redo: Bool) -> UndoManager? {
         let own = undoManager
         guard let files = fileUndo?() else { return own }
-        // An editor's own history is always a ClockedUndoManager (undoManager(for:)).
+        // A history that can undo but has no time for its step (AppKit took part of the step away)
+        // counts as the newest, so ⌘Z still undoes the typing rather than a file.
         let text = (own as? ClockedUndoManager)?.time(redo: redo)
+            ?? ((redo ? own?.canRedo : own?.canUndo) == true ? Int.max : nil)
         return CodeTextView.undoesFiles(files: files.time(redo: redo), text: text, redo: redo) ? files : own
     }
 
