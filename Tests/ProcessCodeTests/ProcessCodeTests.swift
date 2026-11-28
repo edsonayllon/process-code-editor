@@ -1046,6 +1046,29 @@ final class ServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testClosingOtherTabsAndAllTabs() throws {
+        let root = folder.appendingPathComponent("tabs")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = ["a.txt", "b.txt", "c.txt"].map { root.appendingPathComponent($0) }
+        for file in files { try "x".write(to: file, atomically: true, encoding: .utf8) }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        files.forEach { workspace.open($0) }
+        workspace.open(files[2], toSide: true)
+        let b = try XCTUnwrap(workspace.documents.first { $0.name == "b.txt" })
+
+        XCTAssertTrue(workspace.closeTabs(keeping: b))
+        XCTAssertEqual(workspace.documents.map(\.name), ["b.txt"])
+        XCTAssertEqual(workspace.activeDocumentID, b.id)
+        XCTAssertNil(workspace.sideDocumentID, "the side pane's file went with the others")
+
+        workspace.open(files[0])
+        XCTAssertTrue(workspace.closeTabs())
+        XCTAssertEqual(workspace.documents.count, 0)
+        XCTAssertTrue(workspace.terminalVisible, "with no files left, the terminal shows")
+    }
+
+    @MainActor
     func testRenamingMovesTheOpenFilesWithIt() throws {
         let root = folder.appendingPathComponent("renamed")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)

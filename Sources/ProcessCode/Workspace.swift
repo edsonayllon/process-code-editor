@@ -465,6 +465,17 @@ final class Workspace: ObservableObject {
         return true
     }
 
+    /// Closes every tab but `kept`, or every tab with nil, asking about each one with unsaved
+    /// changes in turn. A Cancel stops there and leaves the rest open. Returns false if cancelled.
+    @discardableResult
+    func closeTabs(keeping kept: Document? = nil) -> Bool {
+        for document in documents where document.id != kept?.id {
+            guard close(document) else { return false }
+        }
+        if let kept { activate(kept) }
+        return true
+    }
+
     @discardableResult
     func save(_ document: Document) -> Bool {
         do {

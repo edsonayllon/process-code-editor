@@ -166,6 +166,9 @@ struct TopBar: View {
                                         }
                                         Divider()
                                         Button("Close Tab") { workspace.close(document) }
+                                        Button("Close Other Tabs") { workspace.closeTabs(keeping: document) }
+                                            .disabled(workspace.documents.count < 2)
+                                        Button("Close All Tabs") { workspace.closeTabs() }
                                     }
                             }
                         }
