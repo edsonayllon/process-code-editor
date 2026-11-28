@@ -648,14 +648,34 @@ final class Workspace: ObservableObject {
     func rename(_ url: URL) {
         guard let name = Workspace.ask("Rename", detail: url.lastPathComponent, value: url.lastPathComponent, action: "Rename"),
               name != url.lastPathComponent else { return }
+        rename(url, to: name)
+    }
+
+    /// Renames a file or folder. Its open files close first, so a question about unsaved changes is
+    /// answered while they still have their names (a Save goes to the file being renamed, not a
+    /// new one under the old name), and they reopen under the new one.
+    func rename(_ url: URL, to name: String) {
         let destination = url.deletingLastPathComponent().appendingPathComponent(name)
+        let open = documents(under: url)
+        var closed: [URL] = []
+        for document in open {
+            guard close(document) else {
+                // Cancelled: nothing is renamed, and what had closed opens again.
+                closed.forEach { self.open($0) }
+                return
+            }
+            closed.append(document.url)
+        }
         do {
             try FileManager.default.moveItem(at: url, to: destination)
         } catch {
+            closed.forEach { self.open($0) }
             Workspace.report(error, title: "Couldn't rename “\(url.lastPathComponent)”")
             return
         }
-        if let document = documents.first(where: { $0.url == url }), close(document) { open(destination) }
+        for old in closed {
+            self.open(URL(fileURLWithPath: destination.path + old.path.dropFirst(url.path.count)))
+        }
         reloadTree()
     }
 

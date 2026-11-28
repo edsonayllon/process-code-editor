@@ -974,6 +974,24 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
     }
 
+    @MainActor
+    func testRenamingMovesTheOpenFilesWithIt() throws {
+        let root = folder.appendingPathComponent("renamed")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("src/a.txt")
+        try "a".write(to: file, atomically: true, encoding: .utf8)
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        workspace.open(file)
+
+        workspace.rename(root.appendingPathComponent("src"), to: "lib")
+        XCTAssertEqual(workspace.documents.map { workspace.relativePath(of: $0.url) }, ["lib/a.txt"], "a renamed folder's open files follow it")
+        workspace.rename(root.appendingPathComponent("lib/a.txt"), to: "b.txt")
+        XCTAssertEqual(workspace.documents.map { workspace.relativePath(of: $0.url) }, ["lib/b.txt"])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("lib").path), ["b.txt"],
+                       "nothing is left under the old name")
+    }
+
     func testADraftThatCantBeWrittenIsReported() throws {
         let blocked = folder.appendingPathComponent("blocked")
         try "a file where the folder would go".write(to: blocked, atomically: true, encoding: .utf8)
