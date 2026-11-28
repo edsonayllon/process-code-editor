@@ -142,8 +142,23 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// `resume`, the agent carries on its last conversation, if it knows how.
     nonisolated static func arguments(shell: String, agent: Agent?, resume: Bool = false) -> [String] {
         guard let agent else { return ["-l"] }
-        let command = resume ? agent.resumeCommand ?? agent.command : agent.command
+        let command = startCommand(agent: agent, resume: resume, shell: shell)
         return ["-l", "-i", "-c", "\(command); exec \(LeanTerminalView.shellEscaped(shell)) -l"]
+    }
+
+    /// The shells whose `$SECONDS`, `[ ]` and `{ }` the fallback below is written in.
+    nonisolated static let posixShells: Set<String> = ["zsh", "bash", "sh", "ksh", "dash"]
+
+    /// How soon after starting a failed resume counts as finding nothing to carry on.
+    nonisolated static let resumeGrace = 10
+
+    /// What the agent's tab runs. A resume that fails within a few seconds found nothing to carry on
+    /// (Claude Code says so and exits 1 at once), so the agent starts fresh instead. One that fails
+    /// later was a conversation that ended, and isn't started again.
+    nonisolated static func startCommand(agent: Agent, resume: Bool, shell: String, grace: Int = resumeGrace) -> String {
+        guard resume, let resumeCommand = agent.resumeCommand else { return agent.command }
+        guard posixShells.contains((shell as NSString).lastPathComponent) else { return resumeCommand }
+        return "__pc_started=$SECONDS; \(resumeCommand) || { [ $((SECONDS - __pc_started)) -lt \(grace) ] && \(agent.command); }"
     }
 
     init(directory: URL, agent: Agent?, resume: Bool = false, startedWithFolder: Bool = false) {

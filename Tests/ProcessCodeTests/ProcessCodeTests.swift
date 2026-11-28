@@ -1196,8 +1196,51 @@ final class ServiceTests: XCTestCase {
         XCTAssertTrue(claude.hasConversation(in: project, home: home.path))
         XCTAssertFalse(Agent.presets[1].hasConversation(in: project, home: home.path), "Codex starts fresh")
         XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: claude, resume: true),
-                       ["-l", "-i", "-c", "claude --continue; exec /bin/zsh -l"])
+                       ["-l", "-i", "-c", "__pc_started=$SECONDS; claude --continue || { [ $((SECONDS - __pc_started)) -lt 10 ] && claude; }; exec /bin/zsh -l"])
+        XCTAssertEqual(TerminalSession.arguments(shell: "/opt/homebrew/bin/fish", agent: claude, resume: true),
+                       ["-l", "-i", "-c", "claude --continue; exec /opt/homebrew/bin/fish -l"], "fish keeps the plain resume")
         XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: Agent.presets[1], resume: true),
                        ["-l", "-i", "-c", "codex; exec /bin/zsh -l"])
+    }
+
+    func testClaudesLongAndNonASCIIFolderNamesAreFound() throws {
+        let projects = folder.appendingPathComponent("home/.claude/projects")
+        XCTAssertEqual(Agent.claudeFolderName(for: "/a/caf\u{e9}/\u{1F680}"), "-a-caf----", "é and / are a dash each, and the emoji is two UTF-16 units, so two")
+        let long = "/" + String(repeating: "deep/", count: 50)
+        let name = Agent.claudeFolderName(for: long)
+        XCTAssertGreaterThan(name.count, Agent.claudeNameLimit)
+        let shortened = projects.appendingPathComponent(String(name.prefix(Agent.claudeNameLimit)) + "-k3x9")
+        try FileManager.default.createDirectory(at: shortened, withIntermediateDirectories: true)
+        try Data().write(to: shortened.appendingPathComponent("1.jsonl"))
+        XCTAssertTrue(Agent.presets[0].hasConversation(in: URL(fileURLWithPath: long), home: folder.appendingPathComponent("home").path))
+    }
+
+    /// The resume, run for real in each shell, against a stand-in for claude.
+    func testAResumeWithNothingToContinueStartsFresh() throws {
+        let bin = folder.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let fake = bin.appendingPathComponent("claude")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--continue" ]; then
+          [ "$MODE" = ended ] && sleep 2
+          [ "$MODE" = continued ] && { echo continued; exit 0; }
+          echo "No conversation found to continue"; exit 1
+        fi
+        echo fresh
+        """.write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        for shell in ["/bin/zsh", "/bin/bash", "/bin/sh"] {
+            let command = TerminalSession.startCommand(agent: Agent.presets[0], resume: true, shell: shell, grace: 1)
+            func run(_ mode: String) -> String {
+                var environment = Shell.environment
+                environment["PATH"] = bin.path + ":" + (environment["PATH"] ?? "")
+                environment["MODE"] = mode
+                return Shell.run(shell, ["-c", command], timeout: 20, environment: environment).output
+            }
+            XCTAssertEqual(run("none"), "No conversation found to continue\nfresh\n", shell)
+            XCTAssertEqual(run("continued"), "continued\n", shell)
+            XCTAssertEqual(run("ended"), "No conversation found to continue\n", "\(shell): a conversation that ended later isn't followed by a new one")
+        }
     }
 }

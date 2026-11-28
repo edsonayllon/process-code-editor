@@ -45,18 +45,40 @@ struct Agent: Identifiable, Equatable {
         // Claude Code keeps each folder's conversations in ~/.claude/projects, in a folder named
         // after the path with everything but letters and digits made a dash. Its terminal is
         // given no CLAUDE_CONFIG_DIR, so that's where they are. The shell may see the folder
-        // through a symlink, so both spellings are tried.
+        // through a symlink, so both spellings are tried. A guess that's wrong costs little: the
+        // agent starts fresh when there turns out to be nothing to continue.
+        let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
         let paths = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path])
         return paths.contains { path in
-            let store = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects/" + Agent.claudeFolderName(for: path))
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
-            return files.contains { $0.hasSuffix(".jsonl") }
+            Agent.claudeFolders(for: path, in: projects).contains { store in
+                let files = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
+                return files.contains { $0.hasSuffix(".jsonl") }
+            }
         }
     }
 
+    /// Claude Code shortens a long folder name to its first 200 characters and adds a hash of its
+    /// own, so a long one is matched by those 200.
+    static let claudeNameLimit = 200
+
+    /// The folders in `projects` that may hold the conversations for `path`.
+    static func claudeFolders(for path: String, in projects: URL) -> [URL] {
+        let name = claudeFolderName(for: path)
+        var folders = [projects.appendingPathComponent(name)]
+        if name.count > claudeNameLimit {
+            let prefix = String(name.prefix(claudeNameLimit))
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? []
+            folders += names.filter { $0 != name && $0.hasPrefix(prefix) }.map { projects.appendingPathComponent($0) }
+        }
+        return folders
+    }
+
+    /// The path with every character but an ASCII letter or digit made a dash, counted as
+    /// JavaScript counts them: an emoji, two UTF-16 units, becomes two dashes.
     static func claudeFolderName(for path: String) -> String {
-        String(path.unicodeScalars.map { scalar -> Character in
-            scalar.isASCII && CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "-"
+        String(path.utf16.map { unit -> Character in
+            guard unit < 128, let scalar = Unicode.Scalar(unit), CharacterSet.alphanumerics.contains(scalar) else { return "-" }
+            return Character(scalar)
         })
     }
 }
