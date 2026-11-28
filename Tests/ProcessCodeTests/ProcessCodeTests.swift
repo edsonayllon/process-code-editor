@@ -1385,6 +1385,9 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(workspace.sideDocumentID, side)
         editor.textView.undo(nil)
         XCTAssertEqual(editor.text, "x", "the typing before the rename can still be undone")
+        // Saved again, so the next rename has no unsaved changes to ask about: a test can't answer
+        // the question, and it would wait on screen until closed by hand.
+        XCTAssertTrue(workspace.save(before[0]))
 
         workspace.rename(root.appendingPathComponent("lib/a.txt"), to: "a.md")
         XCTAssertFalse(workspace.documents[0] === before[0], "Markdown is another kind of file, with a preview")
