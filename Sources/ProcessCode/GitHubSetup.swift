@@ -69,14 +69,16 @@ extension ProjectStore {
         process.standardInput = FileHandle.nullDevice
         // gh's last words (why it failed) may still be in the pipe when it exits, so the outcome
         // waits for both its exit and the end of its output, or 2 seconds after the exit if
-        // something it started keeps the output open. A cancelled one has nothing to say.
+        // something it started keeps the output open. A cancelled one that failed has nothing to
+        // say; one that had already succeeded is finished as a success.
         var said = "", status: Int32?, outputEnded = false, done = false
         func finishIfDone(_ store: ProjectStore) {
-            guard let status, outputEnded || store.signInCancelled, !done else { return }
+            guard let status, outputEnded || (store.signInCancelled && status != 0), !done else { return }
             done = true
             output.fileHandleForReading.readabilityHandler = nil
             store.signIn = nil
-            if store.signInCancelled {
+            store.finishSignIn = nil
+            if store.signInCancelled && status != 0 {
                 store.setupStep = .idle
             } else if status == 0 {
                 store.setupStep = .working("Finishing sign-in…")
@@ -110,6 +112,7 @@ extension ProjectStore {
                 }
             }
         }
+        finishSignIn = { [weak self] in if let self { finishIfDone(self) } }
         process.terminationHandler = { [weak self] finished in
             let exit = finished.terminationStatus
             DispatchQueue.main.async { [weak self] in
@@ -133,6 +136,7 @@ extension ProjectStore {
     func cancelSignIn() {
         signInCancelled = true
         signIn?.terminate()
+        finishSignIn?()
         if signIn == nil { setupStep = .idle }
     }
 

@@ -220,6 +220,8 @@ final class ProjectStore: ObservableObject {
     /// The `gh auth login` under way, and whether it was cancelled.
     var signIn: Process?
     var signInCancelled = false
+    /// Ends the sign-in under way if gh has exited, so a Cancel then needn't wait for its output.
+    var finishSignIn: (() -> Void)?
     /// Opens a page in the browser, and puts text on the clipboard. Tests watch them instead.
     var openPage: (URL) -> Void = { NSWorkspace.shared.open($0) }
     var copyText: (String) -> Void = { text in

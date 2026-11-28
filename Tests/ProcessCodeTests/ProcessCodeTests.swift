@@ -1754,6 +1754,28 @@ final class ServiceTests: AppTestCase {
         store.cancelSignIn()
     }
 
+    /// A Cancel that comes after gh has signed in, while something it started keeps its output
+    /// open, finishes the sign-in as a success: git is set up and the note goes.
+    @MainActor
+    func testACancelAfterTheSignInWorkedStillFinishesIt() throws {
+        let oldPath = try fakeGitHubCLI(signInSucceeds: true, waits: 0, holdsOutput: true)
+        defer { setenv("PATH", oldPath, 1) }
+        let store = ProjectStore(defaults: UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!)
+        store.githubSetup = .signedOut
+        store.openPage = { _ in }
+        store.copyText = { _ in }
+        store.signInToGitHub()
+        var deadline = Date().addingTimeInterval(10)
+        while store.signIn?.isRunning != false, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertEqual(store.signIn?.isRunning, false, "gh has exited, signed in, with its output still open")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        store.cancelSignIn()
+        deadline = Date().addingTimeInterval(10)
+        while store.githubSetup != nil, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertNil(store.githubSetup, "signed in all the same: the note goes")
+        XCTAssertEqual(store.setupStep, .idle)
+    }
+
     @MainActor
     func testSigningInShowsTheCodeOpensGitHubAndClearsTheNote() throws {
         let result = try signIn(succeeds: true)
