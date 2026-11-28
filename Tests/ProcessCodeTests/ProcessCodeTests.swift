@@ -753,10 +753,9 @@ final class ProjectTests: AppTestCase {
         // for taking too long all the same.
         let caught = Shell.run("/bin/sh", ["-c", "trap 'exit 143' TERM; sleep 20 & wait"], timeout: 0.5)
         XCTAssertEqual(caught.status, 124, caught.output)
-        // One that catches the stop and still succeeds keeps its result.
-        let finished = Shell.run("/bin/sh", ["-c", "trap 'echo done; exit 0' TERM; sleep 20 & wait"], timeout: 0.5)
-        XCTAssertEqual(finished.status, 0, finished.output)
-        XCTAssertEqual(finished.output, "done\n")
+        // Even one that catches the stop and exits 0: what it printed may be cut short.
+        let cut = Shell.run("/bin/sh", ["-c", "trap 'echo half; exit 0' TERM; sleep 20 & wait"], timeout: 0.5)
+        XCTAssertEqual(cut.status, 124, cut.output)
     }
 
     func testOnlyARepositoryHoldingNoOtherProjectGoesToTheTrash() {
