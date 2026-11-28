@@ -317,12 +317,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 560, height: 360)
             ProjectStore.shared.openFolders = { [weak self] in self?.controllers.map(\.workspace.root.path) ?? [] }
-            ProjectStore.shared.unsavedInWindows = { [weak self] folder in
-                Workspace.unsavedCount(under: folder, in: self?.controllers.map(\.workspace) ?? [])
-            }
-            ProjectStore.shared.closeInWindows = { [weak self] folder in
-                self?.controllers.forEach { $0.workspace.closeTrashed(folder) }
-            }
+            // The same windows a file's Trash asks about and closes tabs in.
+            ProjectStore.shared.unsavedInWindows = { Workspace.unsavedCount(under: $0, in: Workspace.openWorkspaces()) }
+            ProjectStore.shared.closeInWindows = { folder in Workspace.openWorkspaces().forEach { $0.closeTrashed(folder) } }
             window.contentView = NSHostingView(rootView: ProjectsView(
                 isOpen: { [weak self] path in self?.controllers.contains { $0.workspace.root.path == path } ?? false },
                 open: { [weak self] in self?.open($0) },
