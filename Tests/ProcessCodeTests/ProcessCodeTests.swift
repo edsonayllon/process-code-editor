@@ -1036,6 +1036,19 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(result.store.githubSetup, .signedOut)
     }
 
+    func testACheckThatCantReachGitHubChangesOnlyWhatItMust() {
+        let slow = Shell.Result(status: 124, output: "gh didn't answer within 30 seconds and was stopped.")
+        let offline = Shell.Result(status: 1, output: "error connecting to api.github.com")
+        let signedOut = Shell.Result(status: 1, output: "You are not logged into any GitHub hosts. To log in, run: gh auth login")
+        XCTAssertNil(ProjectStore.githubSetup(after: slow, was: .signedOut, signedIn: true), "a sign-in that just succeeded counts")
+        XCTAssertNil(ProjectStore.githubSetup(after: offline, was: .signedOut, signedIn: true))
+        XCTAssertEqual(ProjectStore.githubSetup(after: slow, was: .signedOut, signedIn: false), .signedOut, "Check Again, still unknown")
+        XCTAssertNil(ProjectStore.githubSetup(after: offline, was: nil, signedIn: false), "a working setup isn't undone by a slow network")
+        XCTAssertEqual(ProjectStore.githubSetup(after: slow, was: .notInstalled, signedIn: false), .signedOut, "gh answered, so it's installed")
+        XCTAssertEqual(ProjectStore.githubSetup(after: signedOut, was: nil, signedIn: false), .signedOut)
+        XCTAssertNil(ProjectStore.githubSetup(after: Shell.Result(status: 0, output: ""), was: .signedOut, signedIn: false))
+    }
+
     func testSignInReadsTheOneTimeCode() {
         XCTAssertEqual(ProjectStore.deviceCode(in: "! One-time code (AB12-CD34) copied to clipboard\nOpen this URL…"), "AB12-CD34")
         XCTAssertEqual(ProjectStore.deviceCode(in: "! First copy your one-time code: 9F3E-1A2B\n"), "9F3E-1A2B", "as older versions say it")

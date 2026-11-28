@@ -95,7 +95,7 @@ extension ProjectStore {
                         Shell.run("/usr/bin/env", ["gh", "auth", "setup-git"], timeout: ProjectStore.ghTimeout)
                         DispatchQueue.main.async { [weak self] in
                             self?.setupStep = .idle
-                            self?.recheckGitHub()
+                            self?.recheckGitHub(signedIn: true)
                         }
                     }
                 } else {
@@ -118,21 +118,29 @@ extension ProjectStore {
         if signIn == nil { setupStep = .idle }
     }
 
-    /// Asks gh again whether it's installed and signed in, then reads the locks if it is.
-    func recheckGitHub() {
+    /// Asks gh again whether it's installed and signed in, then reads the locks if it is. `signedIn`
+    /// says a sign-in has just succeeded.
+    func recheckGitHub(signedIn: Bool = false) {
         DispatchQueue.global(qos: .utility).async {
             let result = Shell.run("/usr/bin/env", ["gh", "auth", "status", "--hostname", "github.com"], timeout: ProjectStore.ghTimeout)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                if result.status == 0 {
-                    self.githubSetup = nil
-                    self.loadPrivacy(force: true)
-                } else {
-                    self.githubSetup = ProjectStore.githubSetup(from: result) ?? .signedOut
-                }
+                self.githubSetup = ProjectStore.githubSetup(after: result, was: self.githubSetup, signedIn: signedIn)
+                if self.githubSetup == nil { self.loadPrivacy(force: true) }
                 if self.githubSetup != .notInstalled, self.setupStep == .downloading { self.setupStep = .idle }
             }
         }
+    }
+
+    /// What's left to set up after `gh auth status` gave `result`, given what was left before. A
+    /// failure that names neither a missing CLI nor a missing sign-in (a timeout, no network) says
+    /// nothing about either, so it changes only what it must: gh answered, so it's installed, and a
+    /// sign-in that just succeeded counts.
+    nonisolated static func githubSetup(after result: Shell.Result, was before: GitHubSetup?, signedIn: Bool) -> GitHubSetup? {
+        if result.status == 0 { return nil }
+        if let known = githubSetup(from: result) { return known }
+        if signedIn { return nil }
+        return before == .notInstalled ? .signedOut : before
     }
 
     /// The one-time code in what `gh auth login --web` says, such as "ABCD-1234".

@@ -696,7 +696,7 @@ private struct GitHubSetupBar: View {
             Text("Install the GitHub CLI from the page that opened, then come back here.")
                 .foregroundStyle(Theme.secondary)
             Spacer(minLength: 8)
-            Button("Check Again", action: store.recheckGitHub)
+            Button("Check Again") { store.recheckGitHub() }
             Button("Cancel") { store.setupStep = .idle }
         case .signingIn(let code):
             if let code {
