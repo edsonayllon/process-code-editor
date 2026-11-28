@@ -504,15 +504,17 @@ final class Workspace: ObservableObject {
         return true
     }
 
+    /// Saves a file, and builds a LaTeX file's PDF unless `build` is false (a rename builds it once
+    /// it's at its new name).
     @discardableResult
-    func save(_ document: Document) -> Bool {
+    func save(_ document: Document, build: Bool = true) -> Bool {
         do {
             try document.save()
         } catch {
             Workspace.report(error, title: "Couldn't save “\(document.name)”")
             return false
         }
-        if document.isTeX { build(document) }
+        if build, document.isTeX { self.build(document) }
         return true
     }
 
@@ -532,9 +534,15 @@ final class Workspace: ObservableObject {
         guard document.isTeX, document.build != .running else { return }
         document.build = .running
         let root = self.root, url = document.url
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Latex.build(tex: url, root: root)
             DispatchQueue.main.async {
+                // Renamed while it built: the result is the old name's, so build again at the new one.
+                guard document.url == url else {
+                    document.build = .idle
+                    if let self, self.documents.contains(where: { $0 === document }) { self.build(document) }
+                    return
+                }
                 if let pdf = result.pdf { document.pdfURL = pdf }
                 document.build = result.succeeded ? .succeeded : .failed(result.log)
                 document.revision += 1
@@ -709,10 +717,13 @@ final class Workspace: ObservableObject {
     func rename(_ url: URL, to name: String) {
         let destination = url.deletingLastPathComponent().appendingPathComponent(name)
         let open = documents(under: url)
-        var discarded: [Document] = []
+        var discarded: [Document] = [], saved: [Document] = []
         for document in open {
             switch askAboutChanges(document) {
-            case .save: if !save(document) { return }
+            // A LaTeX file builds once it's at its new name, not at the old one the move takes away.
+            case .save:
+                guard save(document, build: false) else { return }
+                saved.append(document)
             case .cancel: return
             case .discard: discarded.append(document)
             case nil: break
@@ -731,6 +742,7 @@ final class Workspace: ObservableObject {
             if document.canFollow(to: moved) {
                 document.follow(to: moved)
                 if wasDiscarded { document.reload() }
+                if saved.contains(where: { $0 === document }) { build(document) }
             } else {
                 replace(document, with: Document(url: moved))
             }

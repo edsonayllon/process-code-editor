@@ -1333,6 +1333,41 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(workspace.sideDocumentID, side)
     }
 
+    /// A LaTeX build that was running when its file was renamed doesn't leave the old name's
+    /// result on the tab: it builds again at the new name.
+    @MainActor
+    func testABuildRunningThroughARenameBuildsAtTheNewName() throws {
+        let root = folder.appendingPathComponent("rename-build")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".vscode"), withIntermediateDirectories: true)
+        // A stand-in for latexmk: a moment's work, then a PDF beside the file, if the file is still there.
+        let settings = """
+        {
+          "latex-workshop.latex.recipes": [{ "name": "fake", "tools": ["fake"] }],
+          "latex-workshop.latex.tools": [
+            { "name": "fake", "command": "bash", "args": ["-c", "sleep 0.5; test -f \\"%DOC_EXT%\\" && printf x > \\"%DOC%.pdf\\""] }
+          ]
+        }
+        """
+        try settings.write(to: root.appendingPathComponent(".vscode/settings.json"), atomically: true, encoding: .utf8)
+        let paper = root.appendingPathComponent("paper.tex")
+        try "\\documentclass{article}".write(to: paper, atomically: true, encoding: .utf8)
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        workspace.open(paper)
+        let document = try XCTUnwrap(workspace.documents.first)
+        workspace.build(document)
+        XCTAssertEqual(document.build, .running)
+
+        workspace.rename(paper, to: "essay.tex")
+        XCTAssertTrue(workspace.documents.first === document, "the tab followed the file")
+        let deadline = Date().addingTimeInterval(15)
+        while document.build == .running || document.build == .idle, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(document.build, .succeeded, "built again at the new name, not failed at the old one")
+        XCTAssertEqual(document.pdfURL?.lastPathComponent, "essay.pdf")
+    }
+
     /// A rename that can't be done leaves the tabs as they were: the same documents, in the same
     /// order, with the side pane and each one's undo history.
     @MainActor
