@@ -185,9 +185,14 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Types the agent's installer into the terminal, at the shell's prompt where the missing agent
     /// left it, so the install runs in sight and the agent starts once it's done.
     func installAgent() {
+        guard let command = agent?.installCommand else { return }
+        // Typed only at the prompt, never into a program that's running. Until then the offer stays.
+        guard !isBusy else {
+            NSSound.beep()
+            focus()
+            return
+        }
         agentMissing = false
-        // Typed only at the prompt, never into a program that's running.
-        guard let command = agent?.installCommand, !isBusy else { return }
         view.send(txt: command + "\r")
         focus()
     }

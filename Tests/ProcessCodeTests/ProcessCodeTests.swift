@@ -310,6 +310,19 @@ final class TerminalTests: XCTestCase {
         XCTAssertEqual(session.running, "Sleeper", "the agent goes by its name")
     }
 
+    @MainActor
+    func testTheInstallOfferStaysWhileSomethingRuns() {
+        let session = TerminalSession(directory: FileManager.default.temporaryDirectory,
+                                      agent: Agent(id: "test", name: "Sleeper", command: "sleep 30", installCommand: "echo installed"))
+        defer { session.terminate() }
+        let deadline = Date().addingTimeInterval(15)
+        while !session.isBusy, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        XCTAssertTrue(session.isBusy)
+        session.agentMissing = true
+        session.installAgent()
+        XCTAssertTrue(session.agentMissing, "nothing was typed, so the offer stays")
+    }
+
     func testEnvironmentDropsTheLaunchersVariables() {
         let env = TerminalSession.environment(["CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "TERM_PROGRAM": "vscode", "HOME": "/Users/x"], shell: "/bin/zsh")
         XCTAssertFalse(env.contains { $0.hasPrefix("CLAUDE") })
