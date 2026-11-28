@@ -490,6 +490,16 @@ final class WorkspaceTests: AppTestCase {
         XCTAssertEqual(plain, [], "these build on XCTestCase alone")
     }
 
+    /// A text step without a time is the one ⌘Z and ⇧⌘Z take, over a file's step.
+    func testATextStepWithoutATimeIsTakenFirst() {
+        let undo = CodeTextView.textTime(nil, canStep: true, redo: false)
+        XCTAssertFalse(CodeTextView.undoesFiles(files: 5, text: undo, redo: false), "⌘Z undoes the typing")
+        let redo = CodeTextView.textTime(nil, canStep: true, redo: true)
+        XCTAssertFalse(CodeTextView.undoesFiles(files: 5, text: redo, redo: true), "⇧⌘Z redoes the typing")
+        XCTAssertNil(CodeTextView.textTime(nil, canStep: false, redo: false), "nothing to take")
+        XCTAssertEqual(CodeTextView.textTime(7, canStep: true, redo: true), 7)
+    }
+
     @MainActor
     func testDraggingTheSplitHandleReportsHowFarItMoved() throws {
         let view = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: 400, height: SplitHandle.thickness))

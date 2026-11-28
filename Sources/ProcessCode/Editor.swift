@@ -141,14 +141,19 @@ final class CodeTextView: NSTextView {
         return redo ? files < text : files > text
     }
 
+    /// When the text's step was made, for `undoesFiles`. A history that can step but has no time
+    /// for it (AppKit took part of the step away) counts as the one to take: the newest for undo,
+    /// and the oldest for redo (undone last), so ⌘Z and ⇧⌘Z go to the typing, not a file.
+    nonisolated static func textTime(_ time: Int?, canStep: Bool, redo: Bool) -> Int? {
+        time ?? (canStep ? (redo ? Int.min : Int.max) : nil)
+    }
+
     /// The undo history ⌘Z or ⇧⌘Z works on now.
     private func history(redo: Bool) -> UndoManager? {
         let own = undoManager
         guard let files = fileUndo?() else { return own }
-        // A history that can undo but has no time for its step (AppKit took part of the step away)
-        // counts as the newest, so ⌘Z still undoes the typing rather than a file.
-        let text = (own as? ClockedUndoManager)?.time(redo: redo)
-            ?? ((redo ? own?.canRedo : own?.canUndo) == true ? Int.max : nil)
+        let text = CodeTextView.textTime((own as? ClockedUndoManager)?.time(redo: redo),
+                                         canStep: (redo ? own?.canRedo : own?.canUndo) == true, redo: redo)
         return CodeTextView.undoesFiles(files: files.time(redo: redo), text: text, redo: redo) ? files : own
     }
 
