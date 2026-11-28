@@ -170,7 +170,8 @@ behaves like the release. Notarisation takes a few minutes and gives up after 20
 
 Move to Trash in the sidebar asks first only when emptying the Trash would lose something: changes git doesn't
 have (new, modified or ignored files, or a folder that isn't a repository) or unsaved text in an open file.
-Edit ▸ Undo (⌘Z, outside the editor) puts it back.
+Edit ▸ Undo (⌘Z) puts it back. In an editor, ⌘Z and ⇧⌘Z go through its typing and the Trash in the order they
+happened.
 
 ## Projects
 
@@ -184,7 +185,7 @@ that is private on GitHub; the list shows first and asks GitHub afterwards, so t
   sets it as `origin` and pushes.
 - **Move to Trash…** moves the folder to the Trash, where it can be put back. It never deletes anything outright
   and never touches GitHub, and it says first what would be lost: changes not committed, commits not pushed, or
-  a repository that isn't on GitHub at all. A project with a window open can't be moved; close the window first.
+  a repository that isn't on GitHub at all. A project with a window open on it, or on a folder inside it, can't be moved; close the window first.
 
 All of this goes through the GitHub CLI's sign-in (`gh auth login`), so the app has no login of its own. If the
 CLI isn't installed or signed in, a line at the foot of the window fixes it with one button: Install GitHub CLI
