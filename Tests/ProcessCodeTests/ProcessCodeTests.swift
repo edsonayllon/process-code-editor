@@ -279,9 +279,16 @@ final class TerminalTests: XCTestCase {
         XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, folderAgent: claude, remembers: true, startsAgent: true, continues: false))
         XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, folderAgent: claude, remembers: true, startsAgent: false, continues: true))
         XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, folderAgent: claude, remembers: false, startsAgent: true, continues: true))
-        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, laterAgentOpened: true, folderAgent: claude,
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, othersWorked: true, folderAgent: claude,
                                                  remembers: true, startsAgent: true, continues: true),
-                       "a later tab's conversation may be the folder's latest, the one that carries on")
+                       "another Claude Code's conversation may be the folder's latest, the one that carries on")
+
+        let quiet = Date(timeIntervalSince1970: 1000)
+        XCTAssertFalse(TerminalSession.writtenElsewhere(latest: nil, lastOutput: quiet))
+        XCTAssertFalse(TerminalSession.writtenElsewhere(latest: quiet.addingTimeInterval(5), lastOutput: quiet),
+                       "written as the tab finished its reply, or named a moment after: its own")
+        XCTAssertTrue(TerminalSession.writtenElsewhere(latest: quiet.addingTimeInterval(60), lastOutput: quiet),
+                      "written a minute after the tab went quiet: another Claude Code's")
     }
 
     /// The folder's first agent tab stops counting on carrying on once another tab with the same
@@ -300,6 +307,24 @@ final class TerminalTests: XCTestCase {
         XCTAssertFalse(first.laterAgentOpened)
         workspace.newTerminal(agent: fake)
         XCTAssertTrue(first.laterAgentOpened)
+    }
+
+    /// A tab notes when it last printed, so a conversation written after it went quiet can be told
+    /// from its own.
+    @MainActor
+    func testATabNotesWhenItLastPrinted() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        let session = workspace.newTerminal(agent: Agent(id: "late", name: "Late", command: "sleep 1; echo printed; sleep 30"))
+        let started = session.lastOutput.date
+        let deadline = Date().addingTimeInterval(10)
+        while session.lastOutput.date.timeIntervalSince(started) < 0.9, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertGreaterThan(session.lastOutput.date.timeIntervalSince(started), 0.9, "the line printed a second in")
     }
 
     func testChildrenAreReadWithTheirGroups() throws {
@@ -1504,6 +1529,25 @@ final class ServiceTests: XCTestCase {
         XCTAssertTrue(Agent.presets[0].hasConversation(in: URL(fileURLWithPath: sibling), home: home))
         XCTAssertFalse(Agent.presets[0].hasConversation(in: URL(fileURLWithPath: long), home: home),
                        "a folder whose name starts the same isn't this one")
+    }
+
+    /// The folder's latest conversation is the one written to last, in either spelling of its path.
+    func testTheLatestConversationIsTheOneWrittenLast() throws {
+        let home = folder.appendingPathComponent("home-latest")
+        let project = folder.appendingPathComponent("latest-app")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let claude = Agent.presets[0]
+        XCTAssertNil(claude.latestConversation(in: project, home: home.path))
+        let store = Agent.claudeFolder(for: project.resolvingSymlinksInPath().path, in: home.appendingPathComponent(".claude/projects"))
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let older = Date(timeIntervalSince1970: 1_000_000), newer = Date(timeIntervalSince1970: 2_000_000)
+        for (name, date) in [("a.jsonl", older), ("b.jsonl", newer), ("notes.txt", Date())] {
+            let file = store.appendingPathComponent(name)
+            try Data().write(to: file)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        }
+        XCTAssertEqual(claude.latestConversation(in: project, home: home.path), newer, "only conversations count")
+        XCTAssertNil(Agent.presets[1].latestConversation(in: project, home: home.path), "Codex keeps none here")
     }
 
     /// The resume, run for real in each shell, against a stand-in for claude.

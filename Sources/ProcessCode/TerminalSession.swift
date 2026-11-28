@@ -97,6 +97,12 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Another tab with the same agent has opened in the window since. Its conversation may be
     /// the folder's latest, the one that carries on, so this one's may not be.
     var laterAgentOpened = false
+    /// The folder the tab opened in.
+    let directory: URL
+    /// Whether another tab in the window is running Claude Code, asked by the workspace.
+    var otherTabRunsClaudeCode: () -> Bool = { false }
+    /// When the tab last printed anything. Written on the terminal's reading thread.
+    let lastOutput = LastOutput()
     @Published var title: String
     /// The agent this tab was to start isn't installed, so the tab offers to install it.
     @Published var agentMissing = false
@@ -169,10 +175,12 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     init(directory: URL, agent: Agent?, resume: Bool = false, startedWithFolder: Bool = false) {
         self.agent = agent
         self.startedWithFolder = startedWithFolder
+        self.directory = directory
         let shell = TerminalSession.userShell
         title = agent?.name ?? (shell as NSString).lastPathComponent
         super.init()
         view.processDelegate = self
+        view.setProcessOutputHandler { [lastOutput] in lastOutput.mark() }
         view.startProcess(executable: shell, args: TerminalSession.arguments(shell: shell, agent: agent, resume: resume),
                           environment: TerminalSession.environment(shell: shell), currentDirectory: directory.path)
         Settings.shared.$fontName.merge(with: Settings.shared.$fontSize.map { _ in "" }).dropFirst(2)
@@ -243,7 +251,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         switch ClaudeActivity(children: TerminalSession.children(of: group), group: group) {
         case .waiting:
             let settings = Settings.shared
-            return TerminalSession.carriesOn(tabAgent: agent, startedWithFolder: startedWithFolder, laterAgentOpened: laterAgentOpened,
+            let othersWorked = laterAgentOpened || otherTabRunsClaudeCode()
+                || TerminalSession.writtenElsewhere(latest: agent?.latestConversation(in: directory), lastOutput: lastOutput.date)
+            return TerminalSession.carriesOn(tabAgent: agent, startedWithFolder: startedWithFolder, othersWorked: othersWorked,
                                              folderAgent: settings.agent,
                                              remembers: Workspace.remembersState,
                                              startsAgent: settings.startAgentOnOpen, continues: settings.continueConversation) ? nil : name
@@ -257,12 +267,29 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Whether a waiting agent in a tab started with `tabAgent` picks its conversation up again when
     /// the folder next opens: only the tab the folder opened with continues, and only with every
     /// setting that brings it back on. A later agent tab, or Claude Code typed into a shell tab, doesn't.
-    /// Nor does the first tab once a later one with the same agent has opened: the folder carries on
-    /// its latest conversation, which may be the later tab's.
-    nonisolated static func carriesOn(tabAgent: Agent?, startedWithFolder: Bool, laterAgentOpened: Bool = false, folderAgent: Agent?,
+    /// Nor does the first tab once another Claude Code has worked in the folder (`othersWorked`):
+    /// the folder carries on its latest conversation, which may be the other one's.
+    nonisolated static func carriesOn(tabAgent: Agent?, startedWithFolder: Bool, othersWorked: Bool = false, folderAgent: Agent?,
                                       remembers: Bool, startsAgent: Bool, continues: Bool) -> Bool {
-        guard startedWithFolder, !laterAgentOpened, let tabAgent, tabAgent.resumeCommand != nil, tabAgent.id == folderAgent?.id else { return false }
+        guard startedWithFolder, !othersWorked, let tabAgent, tabAgent.resumeCommand != nil, tabAgent.id == folderAgent?.id else { return false }
         return remembers && startsAgent && continues
+    }
+
+    /// Whether Claude Code is what's running in the tab.
+    var runsClaudeCode: Bool {
+        foregroundGroup.map { TerminalSession.isClaudeCode(TerminalSession.commandLine(of: $0)) } ?? false
+    }
+
+    /// How long after a tab's last output its own Claude Code may still be writing its
+    /// conversation (it names it, for one, after the reply).
+    nonisolated static let ownWriteSlack: TimeInterval = 10
+
+    /// Whether the folder's latest conversation was written after this tab went quiet, so
+    /// another Claude Code wrote it: one typed into a shell tab, perhaps since closed, or one
+    /// in another app. A tab's own is written as it replies, while it prints.
+    nonisolated static func writtenElsewhere(latest: Date?, lastOutput: Date, slack: TimeInterval = ownWriteSlack) -> Bool {
+        guard let latest else { return false }
+        return latest > lastOutput.addingTimeInterval(slack)
     }
 
     /// One process a program started: its process group and its program's name.
@@ -405,4 +432,13 @@ struct TerminalHost: NSViewRepresentable {
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         }
     }
+}
+
+/// When a terminal last printed, kept safe to write from the thread that reads its output.
+final class LastOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date()
+
+    func mark() { lock.withLock { last = Date() } }
+    var date: Date { lock.withLock { last } }
 }

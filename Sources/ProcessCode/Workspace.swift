@@ -549,6 +549,9 @@ final class Workspace: ObservableObject {
         if let agent, !startedWithFolder {
             for earlier in terminals where earlier.agent?.id == agent.id { earlier.laterAgentOpened = true }
         }
+        session.otherTabRunsClaudeCode = { [weak self, weak session] in
+            self?.terminals.contains { $0 !== session && $0.runsClaudeCode } ?? false
+        }
         session.onExit = { [weak self, weak session] in
             if let session { self?.remove(session) }
         }

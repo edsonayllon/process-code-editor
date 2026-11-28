@@ -56,6 +56,19 @@ struct Agent: Identifiable, Equatable {
         }
     }
 
+    /// When the conversation with this agent in `folder` that was written to last was written,
+    /// or nil if there's none: the one the folder carries on.
+    func latestConversation(in folder: URL, home: String = TerminalSession.home) -> Date? {
+        guard resumeCommand != nil, id == "claude" else { return nil }
+        let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
+        let stores = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path].map { Agent.claudeFolder(for: $0, in: projects) })
+        return stores.flatMap { store in
+            ((try? FileManager.default.contentsOfDirectory(at: store, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+                .filter { $0.pathExtension == "jsonl" }
+                .compactMap { (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate }
+        }.max()
+    }
+
     /// Claude Code shortens a long folder name to its first 200 characters and adds its hash of
     /// the whole path.
     static let claudeNameLimit = 200
