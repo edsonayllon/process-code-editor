@@ -865,6 +865,11 @@ final class ServiceTests: XCTestCase {
         _ = Shell.run("/usr/bin/env", ["git", "add", "b.txt"], in: root)
         XCTAssertEqual(Shell.run("/usr/bin/env", ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "b"], in: root).status, 0)
         workspace.trash(other)
+        // Git is asked off the main thread, so the move comes a moment later.
+        let deadline = Date().addingTimeInterval(10)
+        while FileManager.default.fileExists(atPath: other.path), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(workspace.fileUndo.undoActionName, "Move to Trash")
@@ -891,6 +896,9 @@ final class ServiceTests: XCTestCase {
         XCTAssertTrue(Workspace.trashWarning(path: "src/clean.swift", isDirectory: false, status: status, unsaved: ["clean.swift"])!
             .hasPrefix("“clean.swift” has unsaved changes"))
         XCTAssertTrue(Workspace.trashWarning(path: "a.txt", isDirectory: false, status: GitStatus(), unsaved: [])!.hasPrefix("This folder isn't a git repository"))
+        XCTAssertEqual(Workspace.trashWarning(path: "a.txt", isDirectory: false, status: nil, unsaved: ["a.txt"]),
+                       "Git didn't answer in time, so it can't say whether all of it is committed.\n\n“a.txt” has unsaved changes, which will be lost.\n\n"
+                       + "It moves to the Trash, where you can put it back. Edit ▸ Undo puts it back at once.")
 
         let more = GitStatus.parse(["## main", " M vendor/lib", "?? app/new.swift", " M app/old.swift"].joined(separator: "\0") + "\0")
         XCTAssertEqual(Workspace.trashWarning(path: "vendor/lib", isDirectory: true, status: more, unsaved: [])?
@@ -898,6 +906,28 @@ final class ServiceTests: XCTestCase {
         let app = Workspace.trashWarning(path: "app", isDirectory: true, status: more, unsaved: [])!
         XCTAssertTrue(app.contains("Some of what's in it isn't committed (new.swift), so the Trash will hold the only copy of that."))
         XCTAssertTrue(app.contains("1 file in it has changes that aren't committed."))
+    }
+
+    /// A folder opened inside an untracked folder of a bigger repository: git names only the
+    /// untracked folder above, and nothing in the opened one is committed.
+    func testTrashAsksInsideAnUntrackedFolderOfAParentRepository() throws {
+        let repo = folder.appendingPathComponent("parent")
+        let opened = repo.appendingPathComponent("a/b")
+        try FileManager.default.createDirectory(at: opened.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try "t".write(to: repo.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try "work".write(to: opened.appendingPathComponent("src/f.swift"), atomically: true, encoding: .utf8)
+        for arguments in [["init", "-q"], ["add", "tracked.txt"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "first"]] {
+            XCTAssertEqual(Shell.run("/usr/bin/env", ["git"] + arguments, in: repo).status, 0)
+        }
+        let status = try XCTUnwrap(Git.status(root: opened, timeout: 30))
+        XCTAssertEqual(status.state(of: "src", isDirectory: true), .untracked)
+        XCTAssertEqual(status.changeCount, 0, "the folder above isn't listed as a change here")
+        XCTAssertTrue(try XCTUnwrap(Workspace.trashWarning(path: "src", isDirectory: true, status: status, unsaved: [])).hasPrefix("It isn't committed"))
+
+        try "a/\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        let ignored = try XCTUnwrap(Git.status(root: opened, timeout: 30))
+        XCTAssertEqual(ignored.state(of: "src/f.swift", isDirectory: false), .ignored)
+        XCTAssertTrue(try XCTUnwrap(Workspace.trashWarning(path: "src/f.swift", isDirectory: false, status: ignored, unsaved: [])).hasPrefix("Git ignores it"))
     }
 
     func testADraftThatCantBeWrittenIsReported() throws {

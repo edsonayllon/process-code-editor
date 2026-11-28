@@ -664,19 +664,31 @@ final class Workspace: ObservableObject {
     /// it back.
     func trash(_ url: URL) {
         let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-        let unsaved = documents(under: url).filter(\.isDirty).map(\.name)
-        // Asked fresh, since the agent may have made the file a moment ago.
-        let status = Git.status(root: root)
-        if let warning = Workspace.trashWarning(path: relativePath(of: url), isDirectory: isDirectory, status: status, unsaved: unsaved) {
-            let alert = NSAlert()
-            alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
-            alert.informativeText = warning
-            alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let path = relativePath(of: url)
+        let root = self.root
+        // Asked fresh, since the agent may have made the file a moment ago, and off the main thread,
+        // so a slow repository can't freeze the window.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let status = Git.status(root: root, timeout: Workspace.trashGitTimeout)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // Read now, after git, so text typed meanwhile counts.
+                let unsaved = self.documents(under: url).filter(\.isDirty).map(\.name)
+                if let warning = Workspace.trashWarning(path: path, isDirectory: isDirectory, status: status, unsaved: unsaved) {
+                    let alert = NSAlert()
+                    alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
+                    alert.informativeText = warning
+                    alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
+                    alert.addButton(withTitle: "Cancel")
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                }
+                self.moveToTrash(url)
+            }
         }
-        moveToTrash(url)
     }
+
+    /// How long git may take to say what a move to the Trash would lose before the question says it couldn't tell.
+    nonisolated static let trashGitTimeout: TimeInterval = 10
 
     private func documents(under url: URL) -> [Document] {
         documents.filter { $0.url.path == url.path || $0.url.path.hasPrefix(url.path + "/") }
@@ -734,9 +746,14 @@ final class Workspace: ObservableObject {
 
     /// What would be lost if `path` went to the Trash and the Trash were emptied, or nil if
     /// nothing would: git has all of it and no open file has unsaved text.
-    nonisolated static func trashWarning(path: String, isDirectory: Bool, status: GitStatus, unsaved: [String]) -> String? {
+    /// A nil `status` means git didn't answer in time.
+    nonisolated static func trashWarning(path: String, isDirectory: Bool, status: GitStatus?, unsaved: [String]) -> String? {
         var risks: [String] = []
-        let state = status.state(of: path, isDirectory: isDirectory)
+        let state = status?.state(of: path, isDirectory: isDirectory)
+        guard let status else {
+            risks.append("Git didn't answer in time, so it can't say whether all of it is committed.")
+            return finish(risks, unsaved: unsaved)
+        }
         if !status.isRepository {
             risks.append("This folder isn't a git repository, so the Trash will hold the only copy.")
         } else if state == .untracked || state == .added {
@@ -768,6 +785,11 @@ final class Workspace: ObservableObject {
         } else if let state, state != .deleted {
             risks.append("It has changes that aren't committed.")
         }
+        return finish(risks, unsaved: unsaved)
+    }
+
+    private nonisolated static func finish(_ risks: [String], unsaved: [String]) -> String? {
+        var risks = risks
         if unsaved.count == 1 {
             risks.append("“\(unsaved[0])” has unsaved changes, which will be lost.")
         } else if unsaved.count > 1 {

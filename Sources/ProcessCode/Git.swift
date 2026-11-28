@@ -27,6 +27,9 @@ struct GitStatus: Equatable {
     var entries: [String: GitState] = [:]
     /// Directories that hold a change somewhere below them (no trailing slash).
     var changedDirectories: Set<String> = []
+    /// The state of everything here when the opened folder lies inside an untracked or ignored
+    /// folder of the repository, which git reports as that one folder, above the opened one.
+    var enclosingState: GitState?
 
     /// The changed files, without ignored ones, sorted by path.
     var changes: [(path: String, state: GitState)] {
@@ -40,6 +43,7 @@ struct GitStatus: Equatable {
     /// The state of a file or folder at `path` (relative, no trailing slash).
     func state(of path: String, isDirectory: Bool) -> GitState? {
         if let state = entries[isDirectory ? path + "/" : path] ?? entries[path] { return state }
+        if let enclosingState { return enclosingState }
         // Inside an untracked or ignored folder, which git reports as one entry.
         var prefix = ""
         for part in path.split(separator: "/").dropLast() {
@@ -109,14 +113,22 @@ enum Git {
     /// Reads the status of the repository holding `root`. Never takes git's index lock, so it can
     /// run while a commit or another git command is in progress.
     static func status(root: URL) -> GitStatus {
+        status(root: root, timeout: nil) ?? GitStatus()
+    }
+
+    /// The same, but nil if git didn't answer within `timeout` seconds, so the caller can tell a
+    /// slow repository from a folder that isn't one.
+    static func status(root: URL, timeout: TimeInterval?) -> GitStatus? {
         let result = Shell.run("/usr/bin/env", ["git", "--no-optional-locks", "status", "--porcelain=v1", "-z", "--branch", "--ignored=matching"],
-                               in: root)
+                               in: root, timeout: timeout)
+        if result.status == 124 { return nil }
         guard result.status == 0 else { return GitStatus() }
         var status = GitStatus.parse(result.output)
         // Paths are relative to the repository's top level, which may be above the opened folder.
-        let top = Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-prefix"], in: root).output
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !top.isEmpty { status = status.relative(to: top) }
+        let top = Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-prefix"], in: root, timeout: timeout)
+        if top.status == 124 { return nil }
+        let prefix = top.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prefix.isEmpty { status = status.relative(to: prefix) }
         return status
     }
 
@@ -134,8 +146,13 @@ extension GitStatus {
         var copy = self
         copy.entries = [:]
         copy.changedDirectories = []
-        for (path, state) in entries where path.hasPrefix(prefix) && path.count > prefix.count {
-            copy.entries[String(path.dropFirst(prefix.count))] = state
+        for (path, state) in entries {
+            if path.hasPrefix(prefix) && path.count > prefix.count {
+                copy.entries[String(path.dropFirst(prefix.count))] = state
+            } else if path.hasSuffix("/"), prefix.hasPrefix(path), state == .untracked || state == .ignored {
+                // The opened folder is inside this one, so all of it shares its state.
+                copy.enclosingState = state
+            }
         }
         for directory in changedDirectories where directory.hasPrefix(prefix) {
             copy.changedDirectories.insert(String(directory.dropFirst(prefix.count)))
