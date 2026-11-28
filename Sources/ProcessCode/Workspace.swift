@@ -96,7 +96,7 @@ final class Workspace: ObservableObject {
     private var gitRefreshing = false
     private var gitRefreshPending = false
     /// What's waiting for git before its Trash question, so a second click doesn't ask twice.
-    private var trashing: Set<String> = []
+    private(set) var trashing: Set<String> = []
     private var documentObservers: [String: AnyCancellable] = [:]
     private let defaults = UserDefaults.standard
     /// The window this folder is open in.
@@ -708,6 +708,8 @@ final class Workspace: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 defer { self.trashing.remove(path) }
+                // Gone while git answered, with the folder holding it, say: nothing to ask or move.
+                guard Workspace.exists(url) else { return }
                 // Read now, after git, so text typed meanwhile counts.
                 let unsaved = self.documents(under: url).filter(\.isDirty).map(\.name)
                 if let warning = Workspace.trashWarning(path: path, isDirectory: isDirectory, status: status, unsaved: unsaved) {
@@ -716,11 +718,16 @@ final class Workspace: ObservableObject {
                     alert.informativeText = warning
                     alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
                     alert.addButton(withTitle: "Cancel")
-                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    guard alert.runModal() == .alertFirstButtonReturn, Workspace.exists(url) else { return }
                 }
                 self.moveToTrash(url)
             }
         }
+    }
+
+    /// Whether something is at `url`, a broken symbolic link included.
+    nonisolated static func exists(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
     }
 
     /// How long git may take to say what a move to the Trash would lose before the question says it couldn't tell.
@@ -844,7 +851,11 @@ final class Workspace: ObservableObject {
         tell(title, explain(error))
     }
 
+    /// Where messages go instead of an alert, in tests.
+    nonisolated(unsafe) static var toldInstead: ((String, String) -> Void)?
+
     static func tell(_ title: String, _ detail: String) {
+        if let toldInstead { return toldInstead(title, detail) }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = detail

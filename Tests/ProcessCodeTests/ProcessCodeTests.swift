@@ -1022,6 +1022,37 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
     }
 
+    /// A folder and then a file inside it, both sent to the Trash before git answers: if the
+    /// folder goes first, the file went with it, so its own move neither asks nor fails.
+    @MainActor
+    func testTrashingAFileAfterItsFolderLeavesNothingToReport() throws {
+        let root = folder.appendingPathComponent("overlap")
+        let dir = root.appendingPathComponent("dir"), file = dir.appendingPathComponent("a.txt")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "a".write(to: file, atomically: true, encoding: .utf8)
+        for arguments in [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "first"]] {
+            XCTAssertEqual(Shell.run("/usr/bin/env", ["git"] + arguments, in: root).status, 0)
+        }
+        var told: [String] = []
+        Workspace.toldInstead = { title, _ in told.append(title) }
+        defer { Workspace.toldInstead = nil }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+
+        workspace.trash(dir)
+        workspace.trash(file)
+        let deadline = Date().addingTimeInterval(10)
+        while !workspace.trashing.isEmpty, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(workspace.trashing.isEmpty)
+        XCTAssertFalse(Workspace.exists(dir))
+        XCTAssertEqual(told, [], "nothing to say: the file is in the Trash with its folder")
+        // Git may answer for the file first, which then goes on its own: undo all there is.
+        while workspace.fileUndo.canUndo { workspace.fileUndo.undo() }
+        XCTAssertTrue(Workspace.exists(file), "undo puts it all back")
+    }
+
     /// ⌘Z in an editor undoes whichever came last, the typing there or a file moved to the Trash,
     /// wherever the keyboard is after the Trash.
     @MainActor
