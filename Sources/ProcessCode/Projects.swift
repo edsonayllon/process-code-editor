@@ -230,6 +230,8 @@ final class ProjectStore: ObservableObject {
     @Published var githubNoticeDismissed: Bool { didSet { defaults.set(githubNoticeDismissed, forKey: "githubNoticeDismissed") } }
     /// The folders that have a window open, set by the app.
     var openFolders: () -> [String] = { [] }
+    /// How many files inside a folder have unsaved changes in the open windows, set by the app.
+    var unsavedInWindows: (URL) -> Int = { _ in 0 }
     @Published var rootPath: String {
         didSet {
             defaults.set(rootPath, forKey: "projectsFolder")
@@ -463,9 +465,15 @@ final class ProjectStore: ObservableObject {
     // MARK: Trash
 
     /// What would be lost, spelled out for the confirmation.
-    /// `drafts` is how many of its files have unsaved changes kept from a window that closed.
-    nonisolated static func trashWarning(for project: Project, drafts: Int = 0) -> String {
+    /// `drafts` is how many of its files have unsaved changes kept from a window that closed, and
+    /// `unsavedOpen` how many have them in a window still open (on a folder above the project).
+    nonisolated static func trashWarning(for project: Project, drafts: Int = 0, unsavedOpen: Int = 0) -> String {
         var risks: [String] = []
+        if unsavedOpen > 0 {
+            risks.append(unsavedOpen == 1
+                         ? "1 file in it has unsaved changes in an open window. It can't be saved once the folder is in the Trash."
+                         : "\(unsavedOpen) files in it have unsaved changes in an open window. They can't be saved once the folder is in the Trash.")
+        }
         if drafts > 0 {
             risks.append(drafts == 1 ? "1 file in it has unsaved changes, kept from when its window closed. They'll be lost."
                          : "\(drafts) files in it have unsaved changes, kept from when its window closed. They'll be lost.")

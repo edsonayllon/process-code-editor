@@ -606,6 +606,12 @@ final class ProjectTests: XCTestCase {
 
         let plainFolder = Project(path: "/r/notes", isRepository: false)
         XCTAssertEqual(ProjectStore.trashWarning(for: plainFolder), "The folder moves to the Trash, where you can put it back.")
+
+        // Unsaved text in a window still open, on a folder above, is named apart from kept drafts.
+        let both = ProjectStore.trashWarning(for: safe, drafts: 1, unsavedOpen: 2)
+        XCTAssertTrue(both.hasPrefix("2 files in it have unsaved changes in an open window. They can't be saved once the folder is in the Trash."))
+        XCTAssertTrue(both.contains("1 file in it has unsaved changes, kept from when its window closed."))
+        XCTAssertTrue(ProjectStore.trashWarning(for: safe, unsavedOpen: 1).hasPrefix("1 file in it has unsaved changes in an open window. It can't"))
     }
 
     func testAHungToolIsStopped() {
@@ -1078,6 +1084,27 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(Drafts.all(under: made).map(\.path), [held], "nothing comes back if the folder is put back, but the open window keeps its own")
         Drafts.remove(for: URL(fileURLWithPath: held))
         XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
+    }
+
+    /// A window open on a folder above a project counts the unsaved files inside it, for the
+    /// Trash warning; saved ones and those elsewhere don't count.
+    @MainActor
+    func testAWindowCountsItsUnsavedFilesInsideAFolder() throws {
+        let root = folder.appendingPathComponent("above")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("app"), withIntermediateDirectories: true)
+        let files = ["app/a.txt", "app/b.txt", "c.txt"].map { root.appendingPathComponent($0) }
+        for file in files { try "x".write(to: file, atomically: true, encoding: .utf8) }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        files.forEach { workspace.open($0) }
+        for index in [0, 2] {
+            let editor = try XCTUnwrap(workspace.documents[index].editor)
+            editor.textView.insertText("!", replacementRange: NSRange(location: 1, length: 0))
+        }
+        XCTAssertEqual(workspace.unsavedCount(under: root.appendingPathComponent("app")), 1, "a.txt; b.txt is saved and c.txt is outside")
+        XCTAssertEqual(workspace.unsavedCount(under: root.appendingPathComponent("app/")), 1)
+        XCTAssertEqual(workspace.unsavedCount(under: root.appendingPathComponent("ap")), 0, "a name that starts the same isn't inside")
+        for document in workspace.documents where document.isDirty { document.reload() }
     }
 
     /// A folder and then a file inside it, both sent to the Trash before git answers: if the

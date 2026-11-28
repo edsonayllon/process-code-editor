@@ -316,6 +316,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 560, height: 360)
             ProjectStore.shared.openFolders = { [weak self] in self?.controllers.map(\.workspace.root.path) ?? [] }
+            ProjectStore.shared.unsavedInWindows = { [weak self] folder in
+                self?.controllers.reduce(0) { $0 + $1.workspace.unsavedCount(under: folder) } ?? 0
+            }
             window.contentView = NSHostingView(rootView: ProjectsView(
                 isOpen: { [weak self] path in self?.controllers.contains { $0.workspace.root.path == path } ?? false },
                 open: { [weak self] in self?.open($0) },

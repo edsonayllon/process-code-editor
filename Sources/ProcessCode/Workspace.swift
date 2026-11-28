@@ -798,6 +798,11 @@ final class Workspace: ObservableObject {
         documents.filter { $0.url.path == url.path || $0.url.path.hasPrefix(url.path + "/") }
     }
 
+    /// How many open files at or inside `url` have unsaved changes.
+    func unsavedCount(under url: URL) -> Int {
+        documents(under: url.standardizedFileURL).filter(\.isDirty).count
+    }
+
     private func moveToTrash(_ url: URL) {
         var trashed: NSURL?
         do {
