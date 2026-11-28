@@ -250,6 +250,46 @@ final class TerminalTests: XCTestCase {
         XCTAssertTrue(Workspace.runningWarning(["npm run dev", "claude"], closing: "the window").hasPrefix("These are still running"))
     }
 
+    func testClaudeCodeAtItsPromptIsNothingToWarnAbout() {
+        XCTAssertTrue(TerminalSession.isClaudeCode(["/Users/x/.local/bin/claude", "--continue"]))
+        XCTAssertTrue(TerminalSession.isClaudeCode(["claude"]))
+        XCTAssertFalse(TerminalSession.isClaudeCode(["codex"]))
+        XCTAssertFalse(TerminalSession.isClaudeCode(["claude-monitor"]))
+        XCTAssertFalse(TerminalSession.isClaudeCode(nil))
+
+        typealias Child = TerminalSession.Child
+        let mcp = [Child(group: 500, program: "ResolvePython"), Child(group: 500, program: "Python")]
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: [], group: 500), .waiting)
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: mcp, group: 500), .waiting, "MCP servers stay in its group")
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: mcp + [Child(group: 500, program: "caffeinate")], group: 500), .replying)
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: mcp + [Child(group: 501, program: "zsh"), Child(group: 500, program: "caffeinate")],
+                                                      group: 500), .commands(1))
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: mcp + [Child(group: 501, program: "zsh"), Child(group: 502, program: "zsh")],
+                                                      group: 500), .commands(2), "a background command left running after the reply")
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: nil, group: 500), .unknown)
+    }
+
+    func testChildrenAreReadWithTheirGroups() throws {
+        // A sleep in the shell's group, as an MCP server is in Claude Code's, and one in a group of
+        // its own, as each of its commands is.
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = ["-c", "sleep 5 & perl -e 'setpgrp(0, 0); sleep 5' & wait"]
+        try shell.run()
+        defer { shell.terminate() }
+        let group = getpgid(shell.processIdentifier)
+        var children: [TerminalSession.Child] = []
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            children = TerminalSession.children(of: shell.processIdentifier) ?? []
+            if children.count == 2, children.contains(where: { $0.group != group }) { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(children.map(\.program).sorted(), ["perl", "sleep"])
+        XCTAssertEqual(TerminalSession.ClaudeActivity(children: children, group: group), .commands(1))
+        for child in children where child.group != group { kill(-child.group, SIGTERM) }
+    }
+
     @MainActor
     func testALiveTerminalNamesWhatsRunningInIt() {
         let session = TerminalSession(directory: FileManager.default.temporaryDirectory,

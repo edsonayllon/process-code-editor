@@ -202,13 +202,74 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         return foreground > 0 && foreground != process.shellPid ? foreground : nil
     }
 
-    /// What's running, in a few words, to name it before it's ended: "npm run dev", or
-    /// "Claude Code (“✳ Fix the login”)" with the title it gave its tab. Nil at the prompt.
+    /// What closing the tab would cut short, in a few words, to name it first: "npm run dev", or
+    /// "Claude Code (“✳ Fix the login”), running a command" with the title it gave its tab. Nil at
+    /// the prompt, and nil for Claude Code waiting for its next prompt: its conversation is kept and
+    /// carries on when the folder opens again, so closing it then loses nothing.
     var running: String? {
         guard let group = foregroundGroup else { return nil }
         let arguments = TerminalSession.commandLine(of: group)
-        return TerminalSession.summary(arguments: arguments, agent: agent, title: title,
-                                       shell: (TerminalSession.userShell as NSString).lastPathComponent)
+        let name = TerminalSession.summary(arguments: arguments, agent: agent, title: title,
+                                           shell: (TerminalSession.userShell as NSString).lastPathComponent)
+        guard TerminalSession.isClaudeCode(arguments) else { return name }
+        switch ClaudeActivity(children: TerminalSession.children(of: group), group: group) {
+        case .waiting: return nil
+        case .unknown: return name
+        case .commands(1): return "\(name), running a command"
+        case .commands(let count): return "\(name), running \(count) commands"
+        case .replying: return "\(name), working on a reply"
+        }
+    }
+
+    /// One process a program started: its process group and its program's name.
+    struct Child: Equatable {
+        let group: pid_t
+        let program: String
+    }
+
+    /// Whether a command line is Claude Code's.
+    nonisolated static func isClaudeCode(_ arguments: [String]?) -> Bool {
+        arguments.map(describe)?.split(separator: " ").first == "claude"
+    }
+
+    /// What Claude Code is doing, read from the processes it started. It runs each shell command
+    /// in a process group of its own, background ones included, while its MCP servers stay in its
+    /// group; and it keeps the Mac awake with `caffeinate` while it works on a reply, which also
+    /// covers thinking and subagents, as they start no process.
+    enum ClaudeActivity: Equatable {
+        /// At its prompt with nothing running: closing loses nothing.
+        case waiting
+        /// Its processes couldn't be read, so it might be doing anything.
+        case unknown
+        /// Shell commands still running, in the foreground or the background.
+        case commands(Int)
+        /// Working on a reply, with no command running.
+        case replying
+
+        init(children: [Child]?, group: pid_t) {
+            guard let children else { self = .unknown; return }
+            let commands = children.filter { $0.group != group }.count
+            if commands > 0 { self = .commands(commands) }
+            else if children.contains(where: { $0.program == "caffeinate" }) { self = .replying }
+            else { self = .waiting }
+        }
+    }
+
+    /// The processes `parent` started, or nil if the system won't say.
+    nonisolated static func children(of parent: pid_t) -> [Child]? {
+        // Asked with no room, it gives a count big enough for every process.
+        let room = proc_listchildpids(parent, nil, 0)
+        guard room > 0 else { return nil }
+        var pids = [pid_t](repeating: 0, count: Int(room))
+        let count = pids.withUnsafeMutableBytes { proc_listchildpids(parent, $0.baseAddress, Int32($0.count)) }
+        guard count >= 0 else { return nil }
+        return pids.prefix(Int(count)).compactMap { pid in
+            let group = getpgid(pid)
+            // One that has just ended is no longer anything to warn about.
+            guard group > 0 else { return nil }
+            let program = commandLine(of: pid).map(describe)?.split(separator: " ").first.map(String.init) ?? ""
+            return Child(group: group, program: program)
+        }
     }
 
     /// The agent goes by its name, anything else by its command, and the tab's title is added when
