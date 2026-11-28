@@ -1686,14 +1686,17 @@ final class ServiceTests: AppTestCase {
     /// succeeds or fails; everything else succeeds.
     /// A stand-in gh. A sign-in that fails says why only after gh has exited, as its last words can
     /// still be in the pipe when it ends.
-    private func fakeGitHubCLI(signInSucceeds: Bool) throws -> String {
+    /// `holdsOutput` has it start a process in a group of its own that keeps its output open, which
+    /// stopping gh doesn't stop.
+    private func fakeGitHubCLI(signInSucceeds: Bool, waits: Int = 1, holdsOutput: Bool = false) throws -> String {
         let bin = folder.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = """
         #!/bin/sh
         if [ "$1 $2" = "auth login" ]; then
           echo "! One-time code (AB12-CD34) copied to clipboard"
-          sleep 1
+          \(holdsOutput ? "perl -e 'setpgrp(0, 0); sleep 10' &" : "")
+          sleep \(waits)
           \(signInSucceeds ? "exit 0" : "(sleep 0.3; echo 'error: the code expired') & exit 1")
         fi
         [ "$1 $2" = "repo list" ] && echo "[]"
@@ -1727,6 +1730,29 @@ final class ServiceTests: AppTestCase {
         }
         XCTAssertTrue(sawCode, "the code is shown while GitHub waits for it")
         return (store, opened, copied)
+    }
+
+    /// Cancel clears the sign-in at once, even while something gh started keeps its output open.
+    @MainActor
+    func testACancelledSignInClearsAtOnce() throws {
+        let oldPath = try fakeGitHubCLI(signInSucceeds: true, waits: 10, holdsOutput: true)
+        defer { setenv("PATH", oldPath, 1) }
+        let store = ProjectStore(defaults: UserDefaults(suiteName: "ProcessCodeTests.\(UUID().uuidString)")!)
+        store.openPage = { _ in }
+        store.copyText = { _ in }
+        store.signInToGitHub()
+        var deadline = Date().addingTimeInterval(10)
+        while store.setupStep != .signingIn(code: "AB12-CD34"), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(store.setupStep, .signingIn(code: "AB12-CD34"))
+        let cancelled = Date()
+        store.cancelSignIn()
+        deadline = Date().addingTimeInterval(5)
+        while store.setupStep != .idle, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertEqual(store.setupStep, .idle)
+        XCTAssertLessThan(Date().timeIntervalSince(cancelled), 1.5, "not after waiting for the output to end")
+        store.signInToGitHub()
+        XCTAssertEqual(store.setupStep, .signingIn(code: nil), "and Sign In works again")
+        store.cancelSignIn()
     }
 
     @MainActor

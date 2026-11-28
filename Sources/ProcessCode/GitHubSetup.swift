@@ -69,10 +69,10 @@ extension ProjectStore {
         process.standardInput = FileHandle.nullDevice
         // gh's last words (why it failed) may still be in the pipe when it exits, so the outcome
         // waits for both its exit and the end of its output, or 2 seconds after the exit if
-        // something it started keeps the output open.
+        // something it started keeps the output open. A cancelled one has nothing to say.
         var said = "", status: Int32?, outputEnded = false, done = false
         func finishIfDone(_ store: ProjectStore) {
-            guard let status, outputEnded, !done else { return }
+            guard let status, outputEnded || store.signInCancelled, !done else { return }
             done = true
             output.fileHandleForReading.readabilityHandler = nil
             store.signIn = nil
