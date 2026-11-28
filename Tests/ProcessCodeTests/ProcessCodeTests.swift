@@ -1005,6 +1005,46 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
     }
 
+    /// ⌘Z in an editor undoes whichever came last, the typing there or a file moved to the Trash,
+    /// wherever the keyboard is after the Trash.
+    @MainActor
+    func testUndoInAnEditorPutsBackAFileTrashedSinceTheTyping() throws {
+        let root = folder.appendingPathComponent("undo")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let open = root.appendingPathComponent("a.txt"), trashed = root.appendingPathComponent("b.txt")
+        try "a".write(to: open, atomically: true, encoding: .utf8)
+        try "b".write(to: trashed, atomically: true, encoding: .utf8)
+        for arguments in [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "first"]] {
+            XCTAssertEqual(Shell.run("/usr/bin/env", ["git"] + arguments, in: root).status, 0)
+        }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        workspace.open(open)
+        let editor = try XCTUnwrap(workspace.documents.first?.editor)
+        editor.textView.setSelectedRange(NSRange(location: 1, length: 0))
+        editor.textView.insertText("!", replacementRange: editor.textView.selectedRange())
+        editor.textView.breakUndoCoalescing()
+        XCTAssertEqual(editor.text, "a!")
+
+        workspace.trash(trashed)
+        let deadline = Date().addingTimeInterval(10)
+        while FileManager.default.fileExists(atPath: trashed.path), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: trashed.path))
+
+        editor.textView.undo(nil)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trashed.path), "the Trash came after the typing, so it's undone first")
+        XCTAssertEqual(editor.text, "a!")
+        editor.textView.undo(nil)
+        XCTAssertEqual(editor.text, "a", "then the typing")
+
+        XCTAssertTrue(CodeTextView.undoesFiles(fileCan: true, fileChanged: 5, textCan: true, edited: 3))
+        XCTAssertFalse(CodeTextView.undoesFiles(fileCan: true, fileChanged: 3, textCan: true, edited: 5), "typing after the Trash is undone first")
+        XCTAssertTrue(CodeTextView.undoesFiles(fileCan: true, fileChanged: 3, textCan: false, edited: 5), "with no typing left, the files")
+        XCTAssertFalse(CodeTextView.undoesFiles(fileCan: false, fileChanged: 5, textCan: true, edited: 3))
+    }
+
     @MainActor
     func testRenamingMovesTheOpenFilesWithIt() throws {
         let root = folder.appendingPathComponent("renamed")

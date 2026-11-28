@@ -87,7 +87,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSM
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmClose() }
 
     // Undo outside an editor is for files: putting back what went to the Trash. Each editor
-    // answers ⌘Z itself, from its own history.
+    // answers ⌘Z itself, from its own history, or from this one when a file went to the Trash
+    // after its last edit (CodeTextView.undo).
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { workspace.fileUndo }
 
     @objc func undo(_ sender: Any?) { workspace.fileUndo.undo() }

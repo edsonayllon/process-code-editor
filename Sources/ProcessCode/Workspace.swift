@@ -104,6 +104,8 @@ final class Workspace: ObservableObject {
     /// Undo for what's done to files in the sidebar (moving them to the Trash). Each editor keeps
     /// its own history for its text.
     let fileUndo = UndoManager()
+    /// When a file last went to the Trash or came back, on the clock editors' typing uses.
+    private(set) var fileChanged = 0
 
     var activeDocument: Document? { documents.first { $0.id == activeDocumentID } }
     var sideDocument: Document? { documents.first { $0.id == sideDocumentID } }
@@ -396,6 +398,7 @@ final class Workspace: ObservableObject {
 
     private func add(_ document: Document) {
         if Workspace.remembersState { document.draftRoot = root }
+        document.editor?.textView.fileUndo = { [weak self] in self.map { ($0.fileUndo, $0.fileChanged) } }
         documents.append(document)
         // A change inside a document (its dirty mark) redraws the tab bar.
         documentObservers[document.id] = document.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -735,12 +738,8 @@ final class Workspace: ObservableObject {
         if let trashed = trashed as URL? {
             fileUndo.registerUndo(withTarget: self) { $0.putBack(trashed, to: url) }
             fileUndo.setActionName("Move to Trash")
-        }
-        // Out of the editor, so ⌘Z puts the file back rather than undoing typing. The tab that
-        // takes the closed one's place grabs the keyboard a moment later, so this waits for it.
-        DispatchQueue.main.async { [weak self] in
-            guard let window = self?.window, window.firstResponder is NSTextView else { return }
-            window.makeFirstResponder(nil)
+            // Newer than any typing, so ⌘Z puts it back even from an editor.
+            fileChanged = UndoClock.tick()
         }
     }
 
@@ -764,6 +763,7 @@ final class Workspace: ObservableObject {
         }
         fileUndo.registerUndo(withTarget: self) { $0.moveToTrash(original) }
         fileUndo.setActionName("Move to Trash")
+        fileChanged = UndoClock.tick()
         reveal(original)
         reloadTree()
     }

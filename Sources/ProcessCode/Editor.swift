@@ -4,10 +4,57 @@ import SwiftUI
 
 // MARK: Text view
 
+/// Orders the changes in a window, so ⌘Z can undo whichever came last: typing in a file, or a
+/// file moved to the Trash.
+enum UndoClock {
+    nonisolated(unsafe) private static var count = 0
+    static func tick() -> Int {
+        count += 1
+        return count
+    }
+}
+
 /// The code text view: plain text, no substitutions, indentation that follows the line above.
 final class CodeTextView: NSTextView {
     var language = Language.plain
     var indentUnit = "    "
+    /// The window's undo for files (putting back what went to the Trash), and when it last changed.
+    var fileUndo: (() -> (manager: UndoManager, changed: Int)?)?
+    /// When this file's text last changed, on the same clock.
+    var edited = 0
+
+    /// Whether ⌘Z (or ⇧⌘Z with `redo`) goes to the files rather than this file's text: when a file
+    /// change is newer than the last edit here, or there's nothing here to undo.
+    nonisolated static func undoesFiles(fileCan: Bool, fileChanged: Int, textCan: Bool, edited: Int) -> Bool {
+        fileCan && (!textCan || fileChanged > edited)
+    }
+
+    /// The undo history ⌘Z or ⇧⌘Z works on now.
+    private func history(redo: Bool) -> UndoManager? {
+        let own = undoManager
+        guard let files = fileUndo?() else { return own }
+        let fileCan = redo ? files.manager.canRedo : files.manager.canUndo
+        let textCan = redo ? own?.canRedo ?? false : own?.canUndo ?? false
+        return CodeTextView.undoesFiles(fileCan: fileCan, fileChanged: files.changed, textCan: textCan, edited: edited) ? files.manager : own
+    }
+
+    @objc func undo(_ sender: Any?) { history(redo: false)?.undo() }
+    @objc func redo(_ sender: Any?) { history(redo: true)?.redo() }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            let manager = history(redo: false)
+            item.title = manager?.undoMenuItemTitle ?? "Undo"
+            return manager?.canUndo ?? false
+        case #selector(redo(_:)):
+            let manager = history(redo: true)
+            item.title = manager?.redoMenuItemTitle ?? "Redo"
+            return manager?.canRedo ?? false
+        default:
+            return super.validateMenuItem(item)
+        }
+    }
 
     override func insertNewline(_ sender: Any?) {
         let text = string as NSString
@@ -357,6 +404,7 @@ final class EditorController: NSObject, NSTextViewDelegate {
 
     func textDidChange(_ notification: Notification) {
         guard !loading else { return }
+        textView.edited = UndoClock.tick()
         textChanged()
         onEdit?()
     }
