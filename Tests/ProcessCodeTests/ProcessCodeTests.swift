@@ -267,6 +267,16 @@ final class TerminalTests: XCTestCase {
         XCTAssertEqual(TerminalSession.ClaudeActivity(children: mcp + [Child(group: 501, program: "zsh"), Child(group: 502, program: "zsh")],
                                                       group: 500), .commands(2), "a background command left running after the reply")
         XCTAssertEqual(TerminalSession.ClaudeActivity(children: nil, group: 500), .unknown)
+
+        let claude = Agent.presets[0], codex = Agent.presets[1]
+        XCTAssertTrue(TerminalSession.carriesOn(tabAgent: claude, folderAgent: claude, remembers: true, startsAgent: true, continues: true))
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: nil, folderAgent: claude, remembers: true, startsAgent: true, continues: true),
+                       "claude typed into a shell tab")
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, folderAgent: codex, remembers: true, startsAgent: true, continues: true),
+                       "the folder now starts another agent")
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, folderAgent: claude, remembers: true, startsAgent: true, continues: false))
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, folderAgent: claude, remembers: true, startsAgent: false, continues: true))
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, folderAgent: claude, remembers: false, startsAgent: true, continues: true))
     }
 
     func testChildrenAreReadWithTheirGroups() throws {

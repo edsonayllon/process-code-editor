@@ -204,8 +204,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
 
     /// What closing the tab would cut short, in a few words, to name it first: "npm run dev", or
     /// "Claude Code (“✳ Fix the login”), running a command" with the title it gave its tab. Nil at
-    /// the prompt, and nil for Claude Code waiting for its next prompt: its conversation is kept and
-    /// carries on when the folder opens again, so closing it then loses nothing.
+    /// the prompt, and nil for Claude Code waiting for its next prompt in the folder's agent tab when
+    /// the folder will carry its conversation on as it opens again, so closing it then loses nothing.
     var running: String? {
         guard let group = foregroundGroup else { return nil }
         let arguments = TerminalSession.commandLine(of: group)
@@ -213,12 +213,23 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
                                            shell: (TerminalSession.userShell as NSString).lastPathComponent)
         guard TerminalSession.isClaudeCode(arguments) else { return name }
         switch ClaudeActivity(children: TerminalSession.children(of: group), group: group) {
-        case .waiting: return nil
+        case .waiting:
+            let settings = Settings.shared
+            return TerminalSession.carriesOn(tabAgent: agent, folderAgent: settings.agent, remembers: Workspace.remembersState,
+                                             startsAgent: settings.startAgentOnOpen, continues: settings.continueConversation) ? nil : name
         case .unknown: return name
         case .commands(1): return "\(name), running a command"
         case .commands(let count): return "\(name), running \(count) commands"
         case .replying: return "\(name), working on a reply"
         }
+    }
+
+    /// Whether a waiting agent in a tab started with `tabAgent` picks its conversation up again when
+    /// the folder next opens: only the agent a folder starts with continues, and only with every
+    /// setting that brings it back on. Claude Code started by hand in a shell tab never does.
+    nonisolated static func carriesOn(tabAgent: Agent?, folderAgent: Agent?, remembers: Bool, startsAgent: Bool, continues: Bool) -> Bool {
+        guard let tabAgent, tabAgent.resumeCommand != nil, tabAgent.id == folderAgent?.id else { return false }
+        return remembers && startsAgent && continues
     }
 
     /// One process a program started: its process group and its program's name.
