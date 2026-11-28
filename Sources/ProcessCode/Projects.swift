@@ -518,6 +518,9 @@ final class ProjectStore: ObservableObject {
         } catch {
             return error.localizedDescription
         }
+        // The warning said its unsaved changes would be lost, so they're not kept to come back
+        // if the folder is put back or cloned again at the same place.
+        Drafts.removeAll(under: project.url)
         let list = visible
         if selection == project.path, let index = list.firstIndex(where: { $0.path == project.path }) {
             selection = (index + 1 < list.count ? list[index + 1] : (index > 0 ? list[index - 1] : nil))?.path

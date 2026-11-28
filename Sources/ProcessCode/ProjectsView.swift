@@ -215,7 +215,7 @@ struct ProjectsView: View {
     private static func confirmTrash(_ project: Project) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Move “\(project.name)” to the Trash?"
-        alert.informativeText = ProjectStore.trashWarning(for: project, drafts: Drafts.all(root: project.url).count)
+        alert.informativeText = ProjectStore.trashWarning(for: project, drafts: Drafts.all(under: project.url).count)
         alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

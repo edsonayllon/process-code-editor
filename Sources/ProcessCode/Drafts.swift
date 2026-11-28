@@ -65,12 +65,26 @@ enum Drafts {
 
     /// The drafts of files that were open in the window for `root`.
     static func all(root: URL) -> [Draft] {
+        let rootPath = root.standardizedFileURL.path
+        return stored().filter { $0.root == rootPath }
+    }
+
+    /// The drafts of files inside `folder`, whichever window they were open in.
+    static func all(under folder: URL) -> [Draft] {
+        let prefix = folder.standardizedFileURL.path + "/"
+        return stored().filter { $0.path.hasPrefix(prefix) }
+    }
+
+    /// Forgets the drafts of files inside `folder`, once it has gone to the Trash.
+    static func removeAll(under folder: URL) {
+        for draft in all(under: folder) { remove(for: URL(fileURLWithPath: draft.path)) }
+    }
+
+    private static func stored() -> [Draft] {
         flush()
         let names = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        let rootPath = root.standardizedFileURL.path
         return names.filter { $0.pathExtension == "json" }
             .compactMap { try? JSONDecoder().decode(Draft.self, from: Data(contentsOf: $0)) }
-            .filter { $0.root == rootPath }
             .sorted { $0.path < $1.path }
     }
 }

@@ -953,6 +953,27 @@ final class ServiceTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(Workspace.trashWarning(path: "src/f.swift", isDirectory: false, status: ignored, unsaved: [])).hasPrefix("Git ignores it"))
     }
 
+    @MainActor
+    func testATrashedProjectTakesItsDraftsWithIt() throws {
+        let suite = "ProcessCodeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(folder.path, forKey: "projectsFolder")
+        let made = try ProjectStore.create(name: "doomed", readme: true, in: folder.path).get()
+        let other = folder.appendingPathComponent("kept/a.txt").path
+        Drafts.write(Draft(root: made.path, path: made.path + "/README.md", text: "typed", diskDate: nil))
+        Drafts.write(Draft(root: made.path + "/sub", path: made.path + "/sub/b.txt", text: "from a window on a subfolder", diskDate: nil))
+        Drafts.write(Draft(root: folder.path + "/kept", path: other, text: "elsewhere", diskDate: nil))
+        XCTAssertEqual(Drafts.all(under: made).count, 2, "the warning counts drafts from a window on a subfolder too")
+
+        let store = ProjectStore(defaults: defaults)
+        let project = Project(path: made.path).inspected()
+        store.projects = [project]
+        XCTAssertNil(store.moveToTrash(project))
+        XCTAssertEqual(Drafts.all(under: made).count, 0, "nothing comes back if the folder is put back")
+        XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
+    }
+
     func testADraftThatCantBeWrittenIsReported() throws {
         let blocked = folder.appendingPathComponent("blocked")
         try "a file where the folder would go".write(to: blocked, atomically: true, encoding: .utf8)
