@@ -16,10 +16,22 @@ enum UndoClock {
 
 /// An undo history that knows when each step in it was made, on the `UndoClock`. A step is
 /// timed when it's made, and keeps that time as undo and redo move it between the two stacks,
-/// so two histories can be ordered by the steps on top of them.
+/// so two histories can be ordered by the steps on top of them. Each step also remembers what it
+/// acts on, so a step that AppKit removes (a text field's, when its editing ends) takes its time
+/// with it.
 final class ClockedUndoManager: UndoManager {
-    private var undoTimes: [Int] = []
-    private var redoTimes: [Int] = []
+    private struct Step {
+        let time: Int
+        var targets: Set<ObjectIdentifier> = []
+    }
+
+    private var undoSteps: [Step] = []
+    private var redoSteps: [Step] = []
+    /// What a `prepare(withInvocationTarget:)` made before its group opened.
+    private var waiting: Set<ObjectIdentifier> = []
+    /// Whether the undo or redo under way registered its counterpart. One that failed (a file
+    /// that couldn't be put back) didn't, and leaves nothing to redo or undo again.
+    private var answered = false
 
     override init() {
         super.init()
@@ -31,41 +43,85 @@ final class ClockedUndoManager: UndoManager {
 
     /// When the step that undo (or redo) would take was made, or nil if there's none.
     func time(redo: Bool) -> Int? {
-        redo ? (canRedo ? redoTimes.last : nil) : (canUndo ? undoTimes.last : nil)
+        redo ? (canRedo ? redoSteps.last?.time : nil) : (canUndo ? undoSteps.last?.time : nil)
     }
+
+    private var recording: Bool { !isUndoing && !isRedoing }
 
     /// A group is opened for each new step, when the first change is registered in it.
     @objc private func opened() {
-        guard !isUndoing, !isRedoing, groupingLevel == 1 else { return }
-        undoTimes.append(UndoClock.tick())
-        redoTimes.removeAll()
+        guard recording, groupingLevel == 1 else { return }
+        undoSteps.append(Step(time: UndoClock.tick(), targets: waiting))
+        waiting = []
+        redoSteps.removeAll()
+    }
+
+    private func note(_ target: Any) {
+        guard recording else {
+            answered = true
+            return
+        }
+        let id = ObjectIdentifier(target as AnyObject)
+        if groupingLevel > 0, !undoSteps.isEmpty {
+            undoSteps[undoSteps.count - 1].targets.insert(id)
+        } else {
+            waiting.insert(id)
+        }
+    }
+
+    override func registerUndo(withTarget target: Any, selector: Selector, object anObject: Any?) {
+        super.registerUndo(withTarget: target, selector: selector, object: anObject)
+        note(target)
+    }
+
+    override func __registerUndoWithTarget(_ target: Any, handler: @escaping @MainActor (Any) -> Void) {
+        super.__registerUndoWithTarget(target, handler: handler)
+        note(target)
+    }
+
+    override func prepare(withInvocationTarget target: Any) -> Any {
+        note(target)
+        return super.prepare(withInvocationTarget: target)
     }
 
     @objc private func undid() {
-        if let time = undoTimes.popLast() { redoTimes.append(time) }
+        if let step = undoSteps.popLast(), answered { redoSteps.append(step) }
+        answered = false
         forgetEmpty()
     }
 
     @objc private func redid() {
-        if let time = redoTimes.popLast() { undoTimes.append(time) }
+        if let step = redoSteps.popLast(), answered { undoSteps.append(step) }
+        answered = false
         forgetEmpty()
     }
 
     override func removeAllActions() {
         super.removeAllActions()
-        undoTimes.removeAll()
-        redoTimes.removeAll()
+        undoSteps.removeAll()
+        redoSteps.removeAll()
     }
 
+    /// Steps that acted only on `target` go, with their times; the others no longer act on it.
     override func removeAllActions(withTarget target: Any) {
         super.removeAllActions(withTarget: target)
+        let id = ObjectIdentifier(target as AnyObject)
+        func without(_ steps: [Step]) -> [Step] {
+            steps.compactMap { step in
+                var step = step
+                guard step.targets.remove(id) == nil || !step.targets.isEmpty else { return nil }
+                return step
+            }
+        }
+        undoSteps = without(undoSteps)
+        redoSteps = without(redoSteps)
         forgetEmpty()
     }
 
     /// A stack that's empty has no times, whatever emptied it.
     private func forgetEmpty() {
-        if !canUndo { undoTimes.removeAll() }
-        if !canRedo { redoTimes.removeAll() }
+        if !canUndo { undoSteps.removeAll() }
+        if !canRedo { redoSteps.removeAll() }
     }
 }
 

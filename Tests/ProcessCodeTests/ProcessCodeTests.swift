@@ -1122,6 +1122,48 @@ final class ServiceTests: XCTestCase {
 
     }
 
+    /// A step AppKit removes by its target (a text field's, when its editing ends) takes its time
+    /// with it, so it can't make an older step look newer; a step that acts on more than that
+    /// target keeps its time.
+    @MainActor
+    func testAnUndoStepRemovedByItsTargetTakesItsTimeWithIt() {
+        final class Target: NSObject {}
+        let history = ClockedUndoManager(), mine = Target(), field = Target()
+        // Each action registers its counterpart, as a real one does, so undo leaves something to redo.
+        func register(_ target: Target) { history.registerUndo(withTarget: target) { _ in register(target) } }
+        func step(_ targets: Target...) {
+            targets.forEach(register)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        step(mine)
+        let first = history.time(redo: false)
+        XCTAssertNotNil(first)
+        step(field)
+        XCTAssertNotEqual(history.time(redo: false), first)
+        history.removeAllActions(withTarget: field)
+        XCTAssertEqual(history.time(redo: false), first, "the field's step went, and its time with it")
+
+        step(mine, field)
+        let both = history.time(redo: false)
+        history.removeAllActions(withTarget: field)
+        XCTAssertEqual(history.time(redo: false), both, "a step that also acts on something else stays")
+
+        history.undo()
+        history.undo()
+        XCTAssertNil(history.time(redo: false))
+        XCTAssertEqual(history.time(redo: true), first, "undone last, so redone first")
+
+        // An undo that fails registers nothing to redo, and takes no time onto the redo stack.
+        history.registerUndo(withTarget: mine) { _ in }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        step(mine)
+        let top = history.time(redo: false)
+        history.undo()
+        XCTAssertEqual(history.time(redo: true), top)
+        history.undo()
+        XCTAssertEqual(history.time(redo: true), top, "the failed one left nothing to redo")
+    }
+
     /// Undo and redo go back and forth through typing and the Trash in the order they happened,
     /// however they're interleaved: each step is ordered by when it was made, not by when its
     /// history last changed.
