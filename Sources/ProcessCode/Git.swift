@@ -224,8 +224,10 @@ enum Shell {
         process.waitUntilExit()
         watchdog.cancel()
         // Stopped by the watchdog, it was too slow, whether it died of the signal or caught it and
-        // exited with a status of its own (a shell's 143).
-        if let timeout, stopped.isSet {
+        // exited with a status of its own (a shell's 143). One that finished cleanly as the timer
+        // went off, or caught the stop and still succeeded, keeps its result.
+        let succeeded = process.terminationReason == .exit && process.terminationStatus == 0
+        if let timeout, stopped.isSet, !succeeded {
             let name = arguments.first.map { tool.hasSuffix("/env") ? $0 : tool } ?? tool
             return Result(status: 124, output: "\(name) didn't answer within \(Int(timeout)) seconds and was stopped.")
         }
