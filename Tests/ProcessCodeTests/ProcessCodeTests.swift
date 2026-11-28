@@ -1203,6 +1203,31 @@ final class ServiceTests: XCTestCase {
                        "nothing is left under the old name")
     }
 
+    /// A rename that can't be done leaves the tabs as they were: the same documents, in the same
+    /// order, with the side pane and each one's undo history.
+    @MainActor
+    func testARenameThatFailsLeavesTheTabsAlone() throws {
+        let root = folder.appendingPathComponent("rename-fails")
+        for folder in ["src", "lib"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        let files = ["src/a.txt", "other.txt", "src/b.txt"].map { root.appendingPathComponent($0) }
+        for file in files { try "x".write(to: file, atomically: true, encoding: .utf8) }
+        var told: [String] = []
+        Workspace.toldInstead = { title, _ in told.append(title) }
+        defer { Workspace.toldInstead = nil }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        files.forEach { workspace.open($0) }
+        workspace.open(files[2], toSide: true)
+        let before = workspace.documents, side = workspace.sideDocumentID
+
+        workspace.rename(root.appendingPathComponent("src"), to: "lib")
+        XCTAssertEqual(told, ["Couldn't rename “src”"], "lib is taken")
+        XCTAssertTrue(workspace.documents.elementsEqual(before, by: ===), "the same tabs, in the same order")
+        XCTAssertEqual(workspace.sideDocumentID, side)
+    }
+
     func testADraftThatCantBeWrittenIsReported() throws {
         let blocked = folder.appendingPathComponent("blocked")
         try "a file where the folder would go".write(to: blocked, atomically: true, encoding: .utf8)

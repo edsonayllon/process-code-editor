@@ -431,23 +431,43 @@ final class Workspace: ObservableObject {
         DispatchQueue.main.async { document.editor?.focus() }
     }
 
+    /// What to do with a tab's unsaved changes before it closes.
+    enum UnsavedAnswer {
+        case save, discard, cancel
+    }
+
+    /// Asks what to do with a tab's unsaved changes. Nil if it has none.
+    private func askAboutChanges(_ document: Document) -> UnsavedAnswer? {
+        guard document.isDirty else { return nil }
+        let alert = NSAlert()
+        alert.messageText = "Save the changes to “\(document.name)”?"
+        alert.informativeText = "Your changes will be lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don't Save")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .cancel
+        default: return .discard
+        }
+    }
+
     /// Closes a tab, asking first if it has unsaved changes. Returns false if the user cancelled.
     @discardableResult
     func close(_ document: Document) -> Bool {
-        if document.isDirty {
-            let alert = NSAlert()
-            alert.messageText = "Save the changes to “\(document.name)”?"
-            alert.informativeText = "Your changes will be lost if you don't save them."
-            alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Don't Save")
-            switch alert.runModal() {
-            case .alertFirstButtonReturn: if !save(document) { return false }
-            case .alertSecondButtonReturn: return false
-            default: document.discardDraft()
-            }
+        switch askAboutChanges(document) {
+        case .save: if !save(document) { return false }
+        case .cancel: return false
+        case .discard: document.discardDraft()
+        case nil: break
         }
-        guard let index = documents.firstIndex(where: { $0.id == document.id }) else { return true }
+        remove(document)
+        return true
+    }
+
+    /// Closes a tab without asking.
+    private func remove(_ document: Document) {
+        guard let index = documents.firstIndex(where: { $0.id == document.id }) else { return }
         var panes = self.panes
         panes.remove(document.id, from: documents.map(\.id))
         documents.remove(at: index)
@@ -460,7 +480,6 @@ final class Workspace: ObservableObject {
             DispatchQueue.main.async { self.activeDocument?.editor?.focus() }
         }
         saveState()
-        return true
     }
 
     /// Closes every tab but `kept`, or every tab with nil, asking about each one with unsaved
@@ -665,28 +684,31 @@ final class Workspace: ObservableObject {
         rename(url, to: name)
     }
 
-    /// Renames a file or folder. Its open files close first, so a question about unsaved changes is
-    /// answered while they still have their names (a Save goes to the file being renamed, not a
-    /// new one under the old name), and they reopen under the new one.
+    /// Renames a file or folder. Its open files with unsaved changes are asked about first, while
+    /// they still have their names (a Save goes to the file being renamed, not a new one under the
+    /// old name), and nothing closes until every answer is in and the move has worked. A Cancel or
+    /// a failed move leaves every tab as it was. The open files then reopen under the new name.
     func rename(_ url: URL, to name: String) {
         let destination = url.deletingLastPathComponent().appendingPathComponent(name)
         let open = documents(under: url)
-        var closed: [URL] = []
+        var discarded: [Document] = []
         for document in open {
-            guard close(document) else {
-                // Cancelled: nothing is renamed, and what had closed opens again.
-                closed.forEach { self.open($0) }
-                return
+            switch askAboutChanges(document) {
+            case .save: if !save(document) { return }
+            case .cancel: return
+            case .discard: discarded.append(document)
+            case nil: break
             }
-            closed.append(document.url)
         }
         do {
             try FileManager.default.moveItem(at: url, to: destination)
         } catch {
-            closed.forEach { self.open($0) }
             Workspace.report(error, title: "Couldn't rename “\(url.lastPathComponent)”")
             return
         }
+        for document in discarded { document.discardDraft() }
+        let closed = open.map(\.url)
+        open.forEach(remove)
         for old in closed {
             self.open(URL(fileURLWithPath: destination.path + old.path.dropFirst(url.path.count)))
         }
