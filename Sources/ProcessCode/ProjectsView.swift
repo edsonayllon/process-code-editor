@@ -161,7 +161,7 @@ struct ProjectsView: View {
                             if project.isExternal {
                                 Button("Remove from List") { store.forget(project) }
                             }
-                            // Only repositories, and not one with a window: close the window first.
+                            // Only repositories, and not one with a window on it or inside it: close the window first.
                             if project.isRepository {
                                 Button("Move to Trash…") { confirmTrash(project) }
                                     .disabled(isOpen(project.path) || store.trashRefusal(for: project) != nil)
@@ -215,7 +215,7 @@ struct ProjectsView: View {
     private static func confirmTrash(_ project: Project) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Move “\(project.name)” to the Trash?"
-        alert.informativeText = ProjectStore.trashWarning(for: project, drafts: Drafts.all(under: project.url).count)
+        alert.informativeText = ProjectStore.trashWarning(for: project, drafts: ProjectStore.shared.keptDrafts(in: project))
         alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

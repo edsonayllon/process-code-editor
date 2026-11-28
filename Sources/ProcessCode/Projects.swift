@@ -228,6 +228,8 @@ final class ProjectStore: ObservableObject {
     }
     /// The note about it was closed, and isn't shown again.
     @Published var githubNoticeDismissed: Bool { didSet { defaults.set(githubNoticeDismissed, forKey: "githubNoticeDismissed") } }
+    /// The folders that have a window open, set by the app.
+    var openFolders: () -> [String] = { [] }
     @Published var rootPath: String {
         didSet {
             defaults.set(rootPath, forKey: "projectsFolder")
@@ -495,10 +497,15 @@ final class ProjectStore: ObservableObject {
     }
 
     /// Why a folder can't go to the Trash from here, or nil if it can. Only repositories go, and
-    /// never the projects folder itself or a folder holding another project on the list.
-    nonisolated static func trashRefusal(for project: Project, root: String, listed: [String]) -> String? {
+    /// never the projects folder itself, a folder holding another project on the list, or one with
+    /// a window open on it or on a folder inside it (in `open`).
+    nonisolated static func trashRefusal(for project: Project, root: String, listed: [String], open: [String] = []) -> String? {
         let path = (project.path as NSString).standardizingPath
         guard project.isRepository else { return "Only a git repository can be moved to the Trash from here." }
+        if let window = open.map({ ($0 as NSString).standardizingPath }).first(where: { $0 == path || $0.hasPrefix(path + "/") }) {
+            return window == path ? "It's open in a window. Close the window first."
+                : "“\((window as NSString).lastPathComponent)” in it is open in a window. Close the window first."
+        }
         // Never the projects folder or the home folder, or anything holding either of them.
         let root = (root as NSString).standardizingPath
         for (kept, name) in [(root, "projects"), (NSHomeDirectory(), "home")] {
@@ -511,9 +518,15 @@ final class ProjectStore: ObservableObject {
         return nil
     }
 
+    /// How many unsaved drafts inside the project would go with it: those kept from windows that
+    /// have closed.
+    func keptDrafts(in project: Project) -> Int {
+        Drafts.all(under: project.url, except: openFolders()).count
+    }
+
     /// Why this project can't go to the Trash, given what's on the list now.
     func trashRefusal(for project: Project) -> String? {
-        ProjectStore.trashRefusal(for: project, root: rootPath, listed: projects.map(\.path))
+        ProjectStore.trashRefusal(for: project, root: rootPath, listed: projects.map(\.path), open: openFolders())
     }
 
     /// Moves the folder to the Trash and takes it off the list. Never deletes outright, and never
@@ -527,7 +540,8 @@ final class ProjectStore: ObservableObject {
         }
         // The warning said its unsaved changes would be lost, so they're not kept to come back
         // if the folder is put back or cloned again at the same place.
-        Drafts.removeAll(under: project.url)
+        // A window still open on a folder above keeps its own, and would write them again.
+        Drafts.removeAll(under: project.url, except: openFolders())
         let list = visible
         if selection == project.path, let index = list.firstIndex(where: { $0.path == project.path }) {
             selection = (index + 1 < list.count ? list[index + 1] : (index > 0 ? list[index - 1] : nil))?.path

@@ -69,15 +69,18 @@ enum Drafts {
         return stored().filter { $0.root == rootPath }
     }
 
-    /// The drafts of files inside `folder`, whichever window they were open in.
-    static func all(under folder: URL) -> [Draft] {
+    /// The drafts of files inside `folder`, whichever window they were open in, except a window
+    /// on one of `openRoots`: that window still holds the text, and writes its draft again.
+    static func all(under folder: URL, except openRoots: [String] = []) -> [Draft] {
         let prefix = folder.standardizedFileURL.path + "/"
-        return stored().filter { $0.path.hasPrefix(prefix) }
+        let open = Set(openRoots.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        return stored().filter { $0.path.hasPrefix(prefix) && !open.contains($0.root) }
     }
 
-    /// Forgets the drafts of files inside `folder`, once it has gone to the Trash.
-    static func removeAll(under folder: URL) {
-        for draft in all(under: folder) { remove(for: URL(fileURLWithPath: draft.path)) }
+    /// Forgets the drafts of files inside `folder`, once it has gone to the Trash, but not those
+    /// of a window still open on one of `openRoots`.
+    static func removeAll(under folder: URL, except openRoots: [String] = []) {
+        for draft in all(under: folder, except: openRoots) { remove(for: URL(fileURLWithPath: draft.path)) }
     }
 
     private static func stored() -> [Draft] {

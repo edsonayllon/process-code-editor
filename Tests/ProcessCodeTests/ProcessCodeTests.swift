@@ -616,6 +616,12 @@ final class ProjectTests: XCTestCase {
                         "a folder above the projects folder, even with nothing listed inside it")
         XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: NSHomeDirectory()), root: "/r", listed: []))
         XCTAssertNotNil(ProjectStore.trashRefusal(for: Project(path: "/"), root: "/r", listed: []))
+        XCTAssertEqual(ProjectStore.trashRefusal(for: Project(path: "/r/other"), root: "/r", listed: listed, open: ["/r/other"]),
+                       "It's open in a window. Close the window first.")
+        XCTAssertEqual(ProjectStore.trashRefusal(for: Project(path: "/r/other"), root: "/r", listed: listed, open: ["/r/other/web"]),
+                       "“web” in it is open in a window. Close the window first.", "a window on a folder inside it")
+        XCTAssertNil(ProjectStore.trashRefusal(for: Project(path: "/r/other"), root: "/r", listed: listed, open: ["/r", "/r/other-2"]),
+                     "a window above it, or on a sibling, doesn't stop it")
     }
 
     /// Work that only exists in the folder: a branch never pushed, a branch whose upstream was
@@ -1033,13 +1039,19 @@ final class ServiceTests: XCTestCase {
         Drafts.write(Draft(root: made.path, path: made.path + "/README.md", text: "typed", diskDate: nil))
         Drafts.write(Draft(root: made.path + "/sub", path: made.path + "/sub/b.txt", text: "from a window on a subfolder", diskDate: nil))
         Drafts.write(Draft(root: folder.path + "/kept", path: other, text: "elsewhere", diskDate: nil))
-        XCTAssertEqual(Drafts.all(under: made).count, 2, "the warning counts drafts from a window on a subfolder too")
+        // A window still open on the folder above holds its own, and writes it again as it's typed.
+        let held = made.path + "/c.txt"
+        Drafts.write(Draft(root: folder.path, path: held, text: "in an open window", diskDate: nil))
+        XCTAssertEqual(Drafts.all(under: made).count, 3)
 
         let store = ProjectStore(defaults: defaults)
+        store.openFolders = { [self.folder.path] }
         let project = Project(path: made.path).inspected()
         store.projects = [project]
+        XCTAssertEqual(store.keptDrafts(in: project), 2, "the warning counts drafts from a closed window on a subfolder too, not an open one's")
         XCTAssertNil(store.moveToTrash(project))
-        XCTAssertEqual(Drafts.all(under: made).count, 0, "nothing comes back if the folder is put back")
+        XCTAssertEqual(Drafts.all(under: made).map(\.path), [held], "nothing comes back if the folder is put back, but the open window keeps its own")
+        Drafts.remove(for: URL(fileURLWithPath: held))
         XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
     }
 
