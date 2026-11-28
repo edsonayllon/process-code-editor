@@ -1133,10 +1133,19 @@ final class ServiceTests: XCTestCase {
             let editor = try XCTUnwrap(workspace.documents[index].editor)
             editor.textView.insertText("!", replacementRange: NSRange(location: 1, length: 0))
         }
-        XCTAssertEqual(workspace.unsavedCount(under: root.appendingPathComponent("app")), 1, "a.txt; b.txt is saved and c.txt is outside")
-        XCTAssertEqual(workspace.unsavedCount(under: root.appendingPathComponent("app/")), 1)
-        XCTAssertEqual(workspace.unsavedCount(under: root.appendingPathComponent("ap")), 0, "a name that starts the same isn't inside")
-        for document in workspace.documents where document.isDirty { document.reload() }
+        let app = root.appendingPathComponent("app")
+        XCTAssertEqual(workspace.unsavedPaths(under: app), [files[0].path], "a.txt; b.txt is saved and c.txt is outside")
+        XCTAssertEqual(workspace.unsavedPaths(under: root.appendingPathComponent("app/")), [files[0].path])
+        XCTAssertEqual(workspace.unsavedPaths(under: root.appendingPathComponent("ap")), [], "a name that starts the same isn't inside")
+
+        // A second window, on the folder itself, with the same file unsaved there too: still one file.
+        let inner = Workspace(root: app, launchAgent: false)
+        defer { inner.close() }
+        inner.open(files[0])
+        try XCTUnwrap(inner.documents.first?.editor).textView.insertText("?", replacementRange: NSRange(location: 1, length: 0))
+        XCTAssertEqual(Workspace.unsavedCount(under: app, in: [workspace, inner]), 1, "a file open in two windows counts once")
+        XCTAssertEqual(Workspace.unsavedCount(under: root, in: [workspace, inner]), 2, "a.txt and c.txt")
+        for document in workspace.documents + inner.documents where document.isDirty { document.reload() }
     }
 
     /// Under tests nobody can answer a question on screen, so each one answers by itself and
