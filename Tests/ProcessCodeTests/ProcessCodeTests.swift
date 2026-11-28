@@ -1735,23 +1735,26 @@ final class ServiceTests: XCTestCase {
                        "a folder whose name starts the same isn't this one")
     }
 
-    /// The folder's latest conversation is the one written to last, in either spelling of its path.
-    func testTheLatestConversationIsTheOneWrittenLast() throws {
+    /// A folder's conversations are its sessions' files, each with when it was written last. A
+    /// subagent's transcript isn't one.
+    func testTheConversationsAreTheSessionsFiles() throws {
         let home = folder.appendingPathComponent("home-latest")
         let project = folder.appendingPathComponent("latest-app")
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let claude = Agent.presets[0]
-        XCTAssertNil(claude.latestConversation(in: project, home: home.path))
+        XCTAssertEqual(claude.conversations(in: project, home: home.path), [])
         let store = Agent.claudeFolder(for: project.resolvingSymlinksInPath().path, in: home.appendingPathComponent(".claude/projects"))
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
         let older = Date(timeIntervalSince1970: 1_000_000), newer = Date(timeIntervalSince1970: 2_000_000)
-        for (name, date) in [("a.jsonl", older), ("b.jsonl", newer), ("notes.txt", Date())] {
+        for (name, date) in [("a.jsonl", older), ("b.jsonl", newer), ("notes.txt", Date()), ("agent-1f2e.jsonl", Date())] {
             let file = store.appendingPathComponent(name)
             try Data().write(to: file)
             try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
         }
-        XCTAssertEqual(claude.latestConversation(in: project, home: home.path), newer, "only conversations count")
-        XCTAssertNil(Agent.presets[1].latestConversation(in: project, home: home.path), "Codex keeps none here")
+        let found = claude.conversations(in: project, home: home.path).sorted { $0.written < $1.written }
+        XCTAssertEqual(found, [Agent.Conversation(session: "a", written: older), Agent.Conversation(session: "b", written: newer)],
+                       "only conversations count, not notes or a subagent's transcript")
+        XCTAssertEqual(Agent.presets[1].conversations(in: project, home: home.path), [], "Codex keeps none here")
     }
 
     /// The resume, run for real in each shell, against a stand-in for claude.

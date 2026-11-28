@@ -58,7 +58,8 @@ struct Agent: Identifiable, Equatable {
         let stores = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path].map { Agent.claudeFolder(for: $0, in: projects) })
         return stores.flatMap { store in
             ((try? FileManager.default.contentsOfDirectory(at: store, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-                .filter { $0.pathExtension == "jsonl" }
+                // Earlier versions kept a subagent's transcript here too, as agent-<id>.jsonl.
+                .filter { $0.pathExtension == "jsonl" && !$0.lastPathComponent.hasPrefix("agent-") }
                 .map { file in
                     Conversation(session: file.deletingPathExtension().lastPathComponent,
                                  written: (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast)
@@ -69,12 +70,6 @@ struct Agent: Identifiable, Equatable {
     /// Whether there's an earlier conversation with this agent in `folder` to carry on.
     func hasConversation(in folder: URL, home: String = TerminalSession.home) -> Bool {
         !conversations(in: folder, home: home).isEmpty
-    }
-
-    /// When the conversation with this agent in `folder` that was written to last was written,
-    /// or nil if there's none: the one the folder carries on.
-    func latestConversation(in folder: URL, home: String = TerminalSession.home) -> Date? {
-        conversations(in: folder, home: home).map(\.written).max()
     }
 
     /// The session of the Claude Code running as process `pid`, which names the conversation it
