@@ -1,18 +1,31 @@
 import XCTest
 @testable import ProcessCode
 
-/// What every test class here builds on. A question or file panel can't be answered in a test, and
-/// would stay on screen and hang the run, so each one gets an answer that changes nothing: Don't
-/// Save or Cancel where the question has one, and Cancel for a panel. A test that needs another
-/// answer sets `NSAlert.answering` itself; the next test starts over.
+/// What every test class here builds on (`testEveryTestClassIsAnAppTestCase` checks). A question
+/// or file panel can't be answered in a test, and would stay on screen and hang the run, so each
+/// one gets an answer that changes nothing: Don't Save or Cancel where the question has one, and
+/// Cancel for a panel. A test that needs another answer calls `answer(_:)`; the next test starts
+/// over. What a test moves to the Trash goes to a folder of its own, removed after it, so the real
+/// Trash never fills with test folders. All of it is set in `invokeTest`, around `setUp`, so an
+/// override of `setUp` can't leave it out.
 class AppTestCase: XCTestCase {
     /// The questions asked so far in this test, each its title and then its detail.
     nonisolated(unsafe) static var asked: [String] = []
 
-    override func setUp() {
-        super.setUp()
+    override func invokeTest() {
         AppTestCase.answer([])
         NSSavePanel.choosing = { _ in .cancel }
+        Workspace.openWorkspaces = { [] }
+        let trash = FileManager.default.temporaryDirectory.appendingPathComponent("ProcessCodeTests-trash-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: trash) }
+        Trash.move = { url in
+            let into = trash.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+            let moved = into.appendingPathComponent(url.lastPathComponent)
+            try FileManager.default.moveItem(at: url, to: moved)
+            return moved
+        }
+        super.invokeTest()
     }
 
     /// Answers the next questions in turn with these buttons, by title, and any after them with
@@ -449,6 +462,34 @@ final class TerminalTests: AppTestCase {
 }
 
 final class WorkspaceTests: AppTestCase {
+    /// Every test class here builds on AppTestCase, so no test can leave a question on screen and
+    /// hang the run, or fill the real Trash.
+    func testEveryTestClassIsAnAppTestCase() {
+        func inherits(_ cls: AnyClass, from base: AnyClass) -> Bool {
+            var next: AnyClass? = cls
+            while let current = next {
+                if ObjectIdentifier(current) == ObjectIdentifier(base) { return true }
+                next = class_getSuperclass(current)
+            }
+            return false
+        }
+        // Only the classes this test bundle defines: some of the system's abort on any message.
+        guard let image = Bundle(for: AppTestCase.self).executablePath else { return XCTFail("no test bundle") }
+        var count: UInt32 = 0
+        guard let names = objc_copyClassNamesForImage(image, &count) else { return XCTFail("no class list") }
+        defer { free(UnsafeMutableRawPointer(mutating: names)) }
+        var found = 0, plain: [String] = []
+        for index in 0..<Int(count) {
+            let name = String(cString: names[index])
+            guard let cls = NSClassFromString(name), inherits(cls, from: XCTestCase.self),
+                  ObjectIdentifier(cls) != ObjectIdentifier(AppTestCase.self) else { continue }
+            found += 1
+            if !inherits(cls, from: AppTestCase.self) { plain.append(name) }
+        }
+        XCTAssertGreaterThan(found, 5, "the test classes were found")
+        XCTAssertEqual(plain, [], "these build on XCTestCase alone")
+    }
+
     @MainActor
     func testDraggingTheSplitHandleReportsHowFarItMoved() throws {
         let view = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: 400, height: SplitHandle.thickness))

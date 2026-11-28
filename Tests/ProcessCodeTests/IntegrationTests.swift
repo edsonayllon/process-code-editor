@@ -100,9 +100,11 @@ final class IntegrationTests: AppTestCase {
         let claude = bin.appendingPathComponent("claude")
         try script.write(to: claude, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
-        // The terminals' shell starts with this home and the system's PATH; its start-up file adds the stand-in.
+        // The terminals' shell starts with this home and the system's PATH; its start-up files put
+        // the stand-in first. A login shell's /etc/zprofile (path_helper) moves /usr/local/bin and
+        // /opt/homebrew/bin ahead of what .zshenv set, so .zprofile and .zshrc, read after it, say it again.
         let path = "export PATH=\"$HOME/bin:$PATH\"\n"
-        for file in [".zshenv", ".bash_profile", ".profile"] {
+        for file in [".zshenv", ".zprofile", ".zshrc", ".bash_profile", ".profile"] {
             try path.write(to: home.appendingPathComponent(file), atomically: true, encoding: .utf8)
         }
     }
@@ -130,6 +132,8 @@ final class IntegrationTests: AppTestCase {
         let first = try XCTUnwrap(workspace.terminals.first, "the folder opened with its agent tab")
         XCTAssertTrue(first.startedWithFolder)
         wait("Claude Code to start in the first tab", until: { first.runsClaudeCode })
+        let running = TerminalSession.commandLine(of: tcgetpgrp(try XCTUnwrap(first.view.process).childfd)) ?? []
+        XCTAssertTrue(running.contains { $0.hasPrefix(home.path) }, "the stand-in, not an installed Claude Code: \(running)")
 
         // Its own conversation is the folder's latest: closing it loses nothing, so it doesn't ask.
         type("hello", in: first)
@@ -326,15 +330,8 @@ final class IntegrationTests: AppTestCase {
         store.closeInWindows = { workspace.closeTrashed($0) }
         let project = Project(path: made.path).inspected()
         store.projects = [project]
-        let ask = { (project: Project) -> Bool in
-            let alert = NSAlert()
-            alert.messageText = "Move “\(project.name)” to the Trash?"
-            alert.informativeText = ProjectStore.trashWarning(for: project, drafts: store.keptDrafts(in: project),
-                                                              unsavedOpen: store.unsavedInWindows(project.url))
-            alert.addButton(withTitle: "Move to Trash")
-            alert.addButton(withTitle: "Cancel")
-            return alert.answer() == .alertFirstButtonReturn
-        }
+        // The Projects window's own question.
+        let ask = { ProjectsView.confirmTrash($0, store: store) }
 
         AppTestCase.answer(["Cancel"])
         store.trash(project, confirm: ask, report: { XCTFail($0) })
@@ -348,5 +345,32 @@ final class IntegrationTests: AppTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: made.path), "in the Trash")
         XCTAssertEqual(workspace.documents.map(\.name), ["notes.txt"], "the project's tab closed; the other stayed")
         XCTAssertEqual(Drafts.all(under: made).count, 0, "no draft left to come back")
+    }
+
+    /// A file sent to the Trash from one window's sidebar, while another window, on a folder inside
+    /// this one, has it open and unsaved: the question names it, and after the move that window
+    /// closes its tab too.
+    @MainActor
+    func testTrashingAFileAsksAboutAndClosesItsTabInEveryWindow() throws {
+        let outer = folder.appendingPathComponent("outer")
+        let inner = outer.appendingPathComponent("inner")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let file = inner.appendingPathComponent("x.txt"), kept = inner.appendingPathComponent("y.txt")
+        for url in [file, kept] { try "x".write(to: url, atomically: true, encoding: .utf8) }
+        let a = Workspace(root: outer, launchAgent: false), b = Workspace(root: inner, launchAgent: false)
+        defer { a.close(); b.close() }
+        Workspace.openWorkspaces = { [a, b] }
+        b.open(file)
+        b.open(kept)
+        try XCTUnwrap(b.documents.first?.editor).textView.insertText("!", replacementRange: NSRange(location: 1, length: 0))
+
+        AppTestCase.answer(["Move to Trash"])
+        a.trash(file)
+        wait("the move", until: { a.trashing.isEmpty })
+        XCTAssertEqual(AppTestCase.asked.count, 1, "the unsaved edit in the other window is asked about")
+        XCTAssertTrue(AppTestCase.asked.first?.contains("“x.txt” has unsaved changes") == true, AppTestCase.asked.first ?? "")
+        XCTAssertFalse(Workspace.exists(file), "moved")
+        XCTAssertEqual(b.documents.map(\.name), ["y.txt"], "the other window closed its tab, and kept the rest")
+        XCTAssertEqual(Drafts.all(under: inner).count, 0, "no draft left to bring it back")
     }
 }

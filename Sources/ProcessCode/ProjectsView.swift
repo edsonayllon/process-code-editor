@@ -207,15 +207,17 @@ struct ProjectsView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let fresh = project.inspectedForTrash()
             DispatchQueue.main.async {
-                store.trash(fresh, confirm: ProjectsView.confirmTrash, report: ProjectsView.reportTrashFailure)
+                store.trash(fresh, confirm: { ProjectsView.confirmTrash($0) }, report: ProjectsView.reportTrashFailure)
             }
         }
     }
 
-    private static func confirmTrash(_ project: Project) -> Bool {
+    /// Asks whether to move it to the Trash, saying what would be lost. `store` is the shared one
+    /// unless a test passes its own.
+    static func confirmTrash(_ project: Project, store: ProjectStore? = nil) -> Bool {
+        let store = store ?? ProjectStore.shared
         let alert = NSAlert()
         alert.messageText = "Move “\(project.name)” to the Trash?"
-        let store = ProjectStore.shared
         alert.informativeText = ProjectStore.trashWarning(for: project, drafts: store.keptDrafts(in: project),
                                                           unsavedOpen: store.unsavedInWindows(project.url))
         alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
