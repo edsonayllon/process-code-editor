@@ -14,9 +14,15 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/release-preview.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 # A bare copy whose release branch is HEAD, with every tag, so semantic-release sees release as it would be.
-git clone --quiet --bare . "$work/origin.git"
+# Copied through git rather than hard-linked (--no-local), with git's automatic maintenance off: a local
+# clone links the object files one by one, and maintenance repacking the copy after the push made one CI
+# run fail with "hardlink different from source".
+git clone --quiet --no-local --bare . "$work/origin.git"
+git -C "$work/origin.git" config gc.auto 0
+git -C "$work/origin.git" config maintenance.auto false
+git -C "$work/origin.git" config receive.autogc false
 git push --quiet --force "$work/origin.git" HEAD:refs/heads/release
-git clone --quiet --branch release "$work/origin.git" "$work/tree"
+git clone --quiet --no-local --branch release "$work/origin.git" "$work/tree"
 
 # Last in the notes step, it sees the notes the generator wrote and keeps them as written (a dry run prints
 # them reformatted for a terminal).
