@@ -319,6 +319,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             ProjectStore.shared.unsavedInWindows = { [weak self] folder in
                 Workspace.unsavedCount(under: folder, in: self?.controllers.map(\.workspace) ?? [])
             }
+            ProjectStore.shared.closeInWindows = { [weak self] folder in
+                self?.controllers.forEach { $0.workspace.closeTrashed(folder) }
+            }
             window.contentView = NSHostingView(rootView: ProjectsView(
                 isOpen: { [weak self] path in self?.controllers.contains { $0.workspace.root.path == path } ?? false },
                 open: { [weak self] in self?.open($0) },

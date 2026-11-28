@@ -641,9 +641,9 @@ final class ProjectTests: XCTestCase {
 
         // Unsaved text in a window still open, on a folder above, is named apart from kept drafts.
         let both = ProjectStore.trashWarning(for: safe, drafts: 1, unsavedOpen: 2)
-        XCTAssertTrue(both.hasPrefix("2 files in it have unsaved changes in an open window. They can't be saved once the folder is in the Trash."))
+        XCTAssertTrue(both.hasPrefix("2 files in it have unsaved changes in an open window. Their tabs will close, and the changes will be lost."))
         XCTAssertTrue(both.contains("1 file in it has unsaved changes, kept from when its window closed."))
-        XCTAssertTrue(ProjectStore.trashWarning(for: safe, unsavedOpen: 1).hasPrefix("1 file in it has unsaved changes in an open window. It can't"))
+        XCTAssertTrue(ProjectStore.trashWarning(for: safe, unsavedOpen: 1).hasPrefix("1 file in it has unsaved changes in an open window. Its tab will close"))
     }
 
     func testAHungToolIsStopped() {
@@ -1116,6 +1116,41 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(Drafts.all(under: made).map(\.path), [held], "nothing comes back if the folder is put back, but the open window keeps its own")
         Drafts.remove(for: URL(fileURLWithPath: held))
         XCTAssertEqual(Drafts.all(under: folder).map(\.path), [other])
+    }
+
+    /// A window open on a folder above a trashed project closes the project's tabs, unsaved ones
+    /// included, and lets their drafts go, as the warning said. Its other tabs stay.
+    @MainActor
+    func testAWindowAboveATrashedProjectClosesItsTabs() throws {
+        let suite = "ProcessCodeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = folder.appendingPathComponent("above-trash")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defaults.set(root.path, forKey: "projectsFolder")
+        let made = try ProjectStore.create(name: "doomed", readme: true, in: root.path).get()
+        let outside = root.appendingPathComponent("notes.txt")
+        try "x".write(to: outside, atomically: true, encoding: .utf8)
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        let readme = made.appendingPathComponent("README.md")
+        workspace.open(readme)
+        workspace.open(outside)
+        let document = try XCTUnwrap(workspace.documents.first)
+        try XCTUnwrap(document.editor).textView.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(document.keepDraft(now: true))
+        XCTAssertEqual(Drafts.all(under: made).count, 1)
+
+        let store = ProjectStore(defaults: defaults)
+        store.openFolders = { [root.path] }
+        store.unsavedInWindows = { Workspace.unsavedCount(under: $0, in: [workspace]) }
+        store.closeInWindows = { workspace.closeTrashed($0) }
+        let project = Project(path: made.path).inspected()
+        store.projects = [project]
+        XCTAssertEqual(store.unsavedInWindows(project.url), 1)
+        XCTAssertNil(store.moveToTrash(project))
+        XCTAssertEqual(workspace.documents.map(\.url.path), [outside.path], "the project's tab closed; the one outside stayed")
+        XCTAssertEqual(Drafts.all(under: made).count, 0, "and its draft went with it")
     }
 
     /// A window open on a folder above a project counts the unsaved files inside it, for the

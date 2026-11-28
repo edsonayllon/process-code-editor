@@ -185,7 +185,7 @@ that is private on GitHub; the list shows first and asks GitHub afterwards, so t
   sets it as `origin` and pushes.
 - **Move to Trash…** moves the folder to the Trash, where it can be put back. It never deletes anything outright
   and never touches GitHub, and it says first what would be lost: changes not committed, commits not pushed, or
-  a repository that isn't on GitHub at all. A project with a window open on it, or on a folder inside it, can't be moved; close the window first.
+  a repository that isn't on GitHub at all. A project with a window open on it, or on a folder inside it, can't be moved; close the window first. A window open on a folder above it closes the project's tabs.
 
 All of this goes through the GitHub CLI's sign-in (`gh auth login`), so the app has no login of its own. If the
 CLI isn't installed or signed in, a line at the foot of the window fixes it with one button: Install GitHub CLI

@@ -232,6 +232,8 @@ final class ProjectStore: ObservableObject {
     var openFolders: () -> [String] = { [] }
     /// How many files inside a folder have unsaved changes in the open windows, set by the app.
     var unsavedInWindows: (URL) -> Int = { _ in 0 }
+    /// Closes the tabs of files inside a folder that went to the Trash, in the open windows, set by the app.
+    var closeInWindows: (URL) -> Void = { _ in }
     @Published var rootPath: String {
         didSet {
             defaults.set(rootPath, forKey: "projectsFolder")
@@ -471,8 +473,8 @@ final class ProjectStore: ObservableObject {
         var risks: [String] = []
         if unsavedOpen > 0 {
             risks.append(unsavedOpen == 1
-                         ? "1 file in it has unsaved changes in an open window. It can't be saved once the folder is in the Trash."
-                         : "\(unsavedOpen) files in it have unsaved changes in an open window. They can't be saved once the folder is in the Trash.")
+                         ? "1 file in it has unsaved changes in an open window. Its tab will close, and the changes will be lost."
+                         : "\(unsavedOpen) files in it have unsaved changes in an open window. Their tabs will close, and the changes will be lost.")
         }
         if drafts > 0 {
             risks.append(drafts == 1 ? "1 file in it has unsaved changes, kept from when its window closed. They'll be lost."
@@ -547,8 +549,9 @@ final class ProjectStore: ObservableObject {
             return error.localizedDescription
         }
         // The warning said its unsaved changes would be lost, so they're not kept to come back
-        // if the folder is put back or cloned again at the same place.
-        // A window still open on a folder above keeps its own, and would write them again.
+        // if the folder is put back or cloned again at the same place. A window open on a folder
+        // above closes its tabs for them and lets their drafts go first.
+        closeInWindows(project.url)
         Drafts.removeAll(under: project.url, except: openFolders())
         let list = visible
         if selection == project.path, let index = list.firstIndex(where: { $0.path == project.path }) {

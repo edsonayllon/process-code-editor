@@ -824,17 +824,23 @@ final class Workspace: ObservableObject {
             Workspace.report(error, title: "Couldn't move “\(url.lastPathComponent)” to the Trash")
             return
         }
-        for document in documents(under: url) {
-            document.discardDraft()
-            document.isDirty = false
-            close(document)
-        }
-        reloadTree()
+        closeTrashed(url)
         if let trashed = trashed as URL? {
             breakTypingUndo()
             fileUndo.registerUndo(withTarget: self) { $0.putBack(trashed, to: url) }
             fileUndo.setActionName("Move to Trash")
         }
+    }
+
+    /// Closes the tabs of the files at or inside `url`, which went to the Trash, and lets their
+    /// unsaved changes go, as the question before the move said.
+    func closeTrashed(_ url: URL) {
+        for document in documents(under: url.standardizedFileURL) {
+            document.discardDraft()
+            document.isDirty = false
+            close(document)
+        }
+        reloadTree()
     }
 
     /// Ends the typing being gathered into one undo step in each open file, so typing after a
