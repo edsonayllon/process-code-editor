@@ -698,6 +698,10 @@ final class ProjectTests: AppTestCase {
             XCTAssertEqual(result.status, 124)
             XCTAssertLessThan(Date().timeIntervalSince(start), 5, "merging errors: \(merging)")
         }
+        // A shell may catch the stop and exit with a status of its own (128 + SIGTERM): stopped
+        // for taking too long all the same.
+        let caught = Shell.run("/bin/sh", ["-c", "trap 'exit 143' TERM; sleep 20 & wait"], timeout: 0.5)
+        XCTAssertEqual(caught.status, 124, caught.output)
     }
 
     func testOnlyARepositoryHoldingNoOtherProjectGoesToTheTrash() {
