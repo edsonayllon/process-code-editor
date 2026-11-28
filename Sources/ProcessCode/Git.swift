@@ -117,15 +117,18 @@ enum Git {
     }
 
     /// The same, but nil if git didn't answer within `timeout` seconds, so the caller can tell a
-    /// slow repository from a folder that isn't one.
+    /// slow repository from a folder that isn't one. The two calls share the time.
     static func status(root: URL, timeout: TimeInterval?) -> GitStatus? {
+        let deadline = timeout.map { Date().addingTimeInterval($0) }
         let result = Shell.run("/usr/bin/env", ["git", "--no-optional-locks", "status", "--porcelain=v1", "-z", "--branch", "--ignored=matching"],
                                in: root, timeout: timeout)
         if result.status == 124 { return nil }
         guard result.status == 0 else { return GitStatus() }
         var status = GitStatus.parse(result.output)
         // Paths are relative to the repository's top level, which may be above the opened folder.
-        let top = Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-prefix"], in: root, timeout: timeout)
+        let left = deadline.map { $0.timeIntervalSinceNow }
+        if let left, left <= 0 { return nil }
+        let top = Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-prefix"], in: root, timeout: left)
         if top.status == 124 { return nil }
         let prefix = top.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prefix.isEmpty { status = status.relative(to: prefix) }

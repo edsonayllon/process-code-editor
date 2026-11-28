@@ -984,6 +984,23 @@ final class ServiceTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(Workspace.trashWarning(path: "src/f.swift", isDirectory: false, status: ignored, unsaved: [])).hasPrefix("Git ignores it"))
     }
 
+    /// The two git calls behind the Trash question share one time limit, so a slow repository
+    /// is named within it rather than within twice it.
+    func testGitStatusKeepsBothCallsWithinOneTimeLimit() throws {
+        let bin = folder.appendingPathComponent("slow-bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let git = bin.appendingPathComponent("git")
+        try "#!/bin/sh\nsleep 1\n".write(to: git, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: git.path)
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        setenv("PATH", bin.path + ":" + path, 1)
+        defer { setenv("PATH", path, 1) }
+
+        let start = Date()
+        XCTAssertNil(Git.status(root: folder, timeout: 1.5), "each call alone is within the limit, but not both")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.9)
+    }
+
     @MainActor
     func testATrashedProjectTakesItsDraftsWithIt() throws {
         let suite = "ProcessCodeTests.\(UUID().uuidString)"
