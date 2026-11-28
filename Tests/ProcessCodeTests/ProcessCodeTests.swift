@@ -1401,7 +1401,7 @@ final class ServiceTests: XCTestCase {
         XCTAssertTrue(claude.hasConversation(in: project, home: home.path))
         XCTAssertFalse(Agent.presets[1].hasConversation(in: project, home: home.path), "Codex starts fresh")
         XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: claude, resume: true),
-                       ["-l", "-i", "-c", "__pc_started=$SECONDS; claude --continue || { [ $((SECONDS - __pc_started)) -lt 10 ] && claude; }; exec /bin/zsh -l"])
+                       ["-l", "-i", "-c", "__pc_started=$(date +%s); claude --continue || { [ $? -eq 1 ] && [ $(($(date +%s) - __pc_started)) -lt 10 ] && claude; }; exec /bin/zsh -l"])
         XCTAssertEqual(TerminalSession.arguments(shell: "/opt/homebrew/bin/fish", agent: claude, resume: true),
                        ["-l", "-i", "-c", "claude --continue; exec /opt/homebrew/bin/fish -l"], "fish keeps the plain resume")
         XCTAssertEqual(TerminalSession.arguments(shell: "/bin/zsh", agent: Agent.presets[1], resume: true),
@@ -1428,15 +1428,17 @@ final class ServiceTests: XCTestCase {
         try """
         #!/bin/sh
         if [ "$1" = "--continue" ]; then
-          [ "$MODE" = ended ] && sleep 2
+          [ "$MODE" = ended ] && sleep 3
           [ "$MODE" = continued ] && { echo continued; exit 0; }
+          [ "$MODE" = interrupted ] && { echo interrupted; exit 130; }
           echo "No conversation found to continue"; exit 1
         fi
         echo fresh
         """.write(to: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-        for shell in ["/bin/zsh", "/bin/bash", "/bin/sh"] {
-            let command = TerminalSession.startCommand(agent: Agent.presets[0], resume: true, shell: shell, grace: 1)
+        // The clock counts whole seconds, so the quick cases take 0 or 1 of them and the slow one 3.
+        for shell in ["/bin/zsh", "/bin/bash", "/bin/sh", "/bin/ksh", "/bin/dash"] {
+            let command = TerminalSession.startCommand(agent: Agent.presets[0], resume: true, shell: shell, grace: 2)
             func run(_ mode: String) -> String {
                 var environment = Shell.environment
                 environment["PATH"] = bin.path + ":" + (environment["PATH"] ?? "")
@@ -1446,6 +1448,7 @@ final class ServiceTests: XCTestCase {
             XCTAssertEqual(run("none"), "No conversation found to continue\nfresh\n", shell)
             XCTAssertEqual(run("continued"), "continued\n", shell)
             XCTAssertEqual(run("ended"), "No conversation found to continue\n", "\(shell): a conversation that ended later isn't followed by a new one")
+            XCTAssertEqual(run("interrupted"), "interrupted\n", "\(shell): only exit status 1 says there was nothing to continue")
         }
     }
 }

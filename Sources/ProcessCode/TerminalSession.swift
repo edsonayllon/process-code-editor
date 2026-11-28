@@ -146,19 +146,21 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         return ["-l", "-i", "-c", "\(command); exec \(LeanTerminalView.shellEscaped(shell)) -l"]
     }
 
-    /// The shells whose `$SECONDS`, `[ ]` and `{ }` the fallback below is written in.
+    /// The shells whose `$?`, `$(( ))`, `[ ]` and `{ }` the fallback below is written in.
     nonisolated static let posixShells: Set<String> = ["zsh", "bash", "sh", "ksh", "dash"]
 
     /// How soon after starting a failed resume counts as finding nothing to carry on.
     nonisolated static let resumeGrace = 10
 
-    /// What the agent's tab runs. A resume that fails within a few seconds found nothing to carry on
-    /// (Claude Code says so and exits 1 at once), so the agent starts fresh instead. One that fails
-    /// later was a conversation that ended, and isn't started again.
+    /// What the agent's tab runs. A resume that exits 1 within a few seconds found nothing to carry
+    /// on (Claude Code says so and exits 1 at once), so the agent starts fresh instead. One that
+    /// fails later was a conversation that ended, and one that fails another way (stopped with
+    /// Ctrl-C, not installed) has said why; neither is started again. The time is read with
+    /// `date`, since dash has no `$SECONDS`.
     nonisolated static func startCommand(agent: Agent, resume: Bool, shell: String, grace: Int = resumeGrace) -> String {
         guard resume, let resumeCommand = agent.resumeCommand else { return agent.command }
         guard posixShells.contains((shell as NSString).lastPathComponent) else { return resumeCommand }
-        return "__pc_started=$SECONDS; \(resumeCommand) || { [ $((SECONDS - __pc_started)) -lt \(grace) ] && \(agent.command); }"
+        return "__pc_started=$(date +%s); \(resumeCommand) || { [ $? -eq 1 ] && [ $(($(date +%s) - __pc_started)) -lt \(grace) ] && \(agent.command); }"
     }
 
     init(directory: URL, agent: Agent?, resume: Bool = false, startedWithFolder: Bool = false) {
