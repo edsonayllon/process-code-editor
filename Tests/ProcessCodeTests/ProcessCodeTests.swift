@@ -1812,6 +1812,25 @@ final class ServiceTests: AppTestCase {
         XCTAssertEqual(Agent.presets[1].conversations(in: project, home: home.path), [], "Codex keeps none here")
     }
 
+    /// Claude Code names a folder's conversations by its real path: /private/tmp for /tmp. The
+    /// folder is found under that name whichever spelling the window was opened with.
+    func testConversationsAreFoundUnderTheFoldersRealPath() throws {
+        let home = folder.appendingPathComponent("home-real")
+        let project = URL(fileURLWithPath: "/tmp").appendingPathComponent("pc-real-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: project) }
+        let real = try XCTUnwrap(Agent.realPath(project.path))
+        XCTAssertTrue(real.hasPrefix("/private/tmp/"), real)
+        XCTAssertEqual(project.resolvingSymlinksInPath().path, project.path, "Foundation spells it /tmp")
+        let store = Agent.claudeFolder(for: real, in: home.appendingPathComponent(".claude/projects"))
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try Data().write(to: store.appendingPathComponent("s.jsonl"))
+        for spelling in [project, URL(fileURLWithPath: real)] {
+            XCTAssertEqual(Agent.presets[0].conversations(in: spelling, home: home.path).map(\.session), ["s"], spelling.path)
+        }
+        XCTAssertNil(Agent.realPath("/no/such/folder/\(UUID().uuidString)"))
+    }
+
     /// The resume, run for real in each shell, against a stand-in for claude.
     func testAResumeWithNothingToContinueStartsFresh() throws {
         let bin = folder.appendingPathComponent("bin")

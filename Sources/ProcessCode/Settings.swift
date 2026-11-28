@@ -52,10 +52,13 @@ struct Agent: Identifiable, Equatable {
         // Claude Code keeps each folder's conversations in ~/.claude/projects, in a folder named
         // after the path with everything but letters and digits made a dash. Its terminal is
         // given no CLAUDE_CONFIG_DIR, so that's where they are. The shell may see the folder
-        // through a symlink, so both spellings are tried. A guess that's wrong costs little: the
-        // agent starts fresh when there turns out to be nothing to continue.
+        // through a symlink, so each spelling is tried, the system's own included: Claude Code
+        // names it by its real path, /private/tmp for /tmp, which resolvingSymlinksInPath turns
+        // back into /tmp. A guess that's wrong costs little: the agent starts fresh when there
+        // turns out to be nothing to continue.
         let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
-        let stores = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path].map { Agent.claudeFolder(for: $0, in: projects) })
+        let paths = [folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path, Agent.realPath(folder.path)].compactMap { $0 }
+        let stores = Set(paths.map { Agent.claudeFolder(for: $0, in: projects) })
         return stores.flatMap { store in
             ((try? FileManager.default.contentsOfDirectory(at: store, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
                 // Earlier versions kept a subagent's transcript here too, as agent-<id>.jsonl.
@@ -65,6 +68,14 @@ struct Agent: Identifiable, Equatable {
                                  written: (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast)
                 }
         }
+    }
+
+    /// The path as the system resolves it, every symlink followed (/tmp is /private/tmp), or nil
+    /// if it isn't there.
+    static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// Whether there's an earlier conversation with this agent in `folder` to carry on.
