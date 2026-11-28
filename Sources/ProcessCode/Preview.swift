@@ -153,6 +153,8 @@ struct MarkdownPreview: NSViewRepresentable {
         var openFile: (URL) -> Void = { _ in }
         /// The folder the page's relative images and links are read from: the file's.
         var base: URL?
+        /// The page's load under way, so a finish from one it replaced isn't taken for it.
+        var navigation: WKNavigation?
 
         /// Loads the page, reading relative images and links from `folder`. Its content is set again
         /// once it has loaded.
@@ -160,7 +162,7 @@ struct MarkdownPreview: NSViewRepresentable {
             base = folder
             loaded = false
             revision = -1
-            webView.loadHTMLString(Markdown.page, baseURL: LocalFileSchemeHandler.url(forDirectory: folder))
+            navigation = webView.loadHTMLString(Markdown.page, baseURL: LocalFileSchemeHandler.url(forDirectory: folder))
         }
 
         func show(_ html: String, in webView: WKWebView) {
@@ -170,6 +172,7 @@ struct MarkdownPreview: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard self.navigation == nil || navigation === self.navigation else { return }
             loaded = true
             if let pending { show(pending, in: webView) }
             pending = nil
