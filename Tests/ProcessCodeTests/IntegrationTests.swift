@@ -349,7 +349,8 @@ final class IntegrationTests: AppTestCase {
 
     /// A file sent to the Trash from one window's sidebar, while another window, on a folder inside
     /// this one, has it open and unsaved: the question names it, and after the move that window
-    /// closes its tab too.
+    /// closes its tab too. ⌘Z puts it back in both windows' sidebars, and ⇧⌘Z asks again once the
+    /// other window has unsaved text in it.
     @MainActor
     func testTrashingAFileAsksAboutAndClosesItsTabInEveryWindow() throws {
         let outer = folder.appendingPathComponent("outer")
@@ -358,19 +359,35 @@ final class IntegrationTests: AppTestCase {
         let file = inner.appendingPathComponent("x.txt"), kept = inner.appendingPathComponent("y.txt")
         for url in [file, kept] { try "x".write(to: url, atomically: true, encoding: .utf8) }
         let a = Workspace(root: outer, launchAgent: false), b = Workspace(root: inner, launchAgent: false)
-        defer { a.close(); b.close() }
         Workspace.openWorkspaces = { [a, b] }
+        defer { Workspace.openWorkspaces = { [] }; a.close(); b.close() }
         b.open(file)
         b.open(kept)
         try XCTUnwrap(b.documents.first?.editor).textView.insertText("!", replacementRange: NSRange(location: 1, length: 0))
 
         AppTestCase.answer(["Move to Trash"])
-        a.trash(file)
+        a.trash(outer.appendingPathComponent("inner/../inner/x.txt"))   // spelled another way, as a path can be
         wait("the move", until: { a.trashing.isEmpty })
         XCTAssertEqual(AppTestCase.asked.count, 1, "the unsaved edit in the other window is asked about")
         XCTAssertTrue(AppTestCase.asked.first?.contains("“x.txt” has unsaved changes") == true, AppTestCase.asked.first ?? "")
         XCTAssertFalse(Workspace.exists(file), "moved")
         XCTAssertEqual(b.documents.map(\.name), ["y.txt"], "the other window closed its tab, and kept the rest")
         XCTAssertEqual(Drafts.all(under: inner).count, 0, "no draft left to bring it back")
+        XCTAssertFalse(b.rows.contains { $0.url.lastPathComponent == "x.txt" }, "gone from the other window's sidebar")
+
+        a.fileUndo.undo()
+        XCTAssertTrue(Workspace.exists(file), "⌘Z put it back")
+        XCTAssertTrue(b.rows.contains { $0.url.lastPathComponent == "x.txt" }, "and the other window's sidebar shows it again")
+
+        b.open(file)
+        let reopened = try XCTUnwrap(b.documents.first { $0.name == "x.txt" })
+        try XCTUnwrap(reopened.editor).textView.insertText("?", replacementRange: NSRange(location: 1, length: 0))
+        AppTestCase.answer(["Cancel"])
+        a.fileUndo.redo()
+        XCTAssertEqual(AppTestCase.asked.count, 1, "⇧⌘Z asks first, now that the other window has unsaved text in it")
+        XCTAssertTrue(AppTestCase.asked.first?.contains("“x.txt” has unsaved changes") == true, AppTestCase.asked.first ?? "")
+        XCTAssertTrue(Workspace.exists(file), "Cancel leaves it")
+        XCTAssertTrue(reopened.isDirty, "with the typing still there")
+        reopened.reload()
     }
 }

@@ -764,6 +764,7 @@ final class Workspace: ObservableObject {
     /// Trash were emptied: work git doesn't have, or unsaved text in an open file. Edit ▸ Undo puts
     /// it back.
     func trash(_ url: URL) {
+        let url = url.standardizedFileURL
         let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
         let path = relativePath(of: url)
         guard trashing.insert(path).inserted else { return }
@@ -778,10 +779,8 @@ final class Workspace: ObservableObject {
                 // Gone while git answered, with the folder holding it, say: nothing to ask or move.
                 guard Workspace.exists(url) else { return }
                 // Read now, after git, so text typed meanwhile counts, in every window: one open on
-                // a folder inside this one may have it open too. A file open in two counts once.
-                var seen = Set<String>()
-                let unsaved = self.everyWorkspace.flatMap { $0.documents(under: url) }
-                    .filter { $0.isDirty && seen.insert($0.url.path).inserted }.map(\.name)
+                // a folder inside this one may have it open too.
+                let unsaved = self.unsavedNames(under: url)
                 if let warning = Workspace.trashWarning(path: path, isDirectory: isDirectory, status: status, unsaved: unsaved) {
                     let alert = NSAlert()
                     alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
@@ -814,6 +813,13 @@ final class Workspace: ObservableObject {
 
     private func documents(under url: URL) -> [Document] {
         documents.filter { $0.url.path == url.path || $0.url.path.hasPrefix(url.path + "/") }
+    }
+
+    /// The names of the files at or inside `url` with unsaved changes in any open window. A file
+    /// open in two windows is named once.
+    private func unsavedNames(under url: URL) -> [String] {
+        everyWorkspace.reduce(into: Set<String>()) { $0.formUnion($1.unsavedPaths(under: url)) }
+            .sorted().map { ($0 as NSString).lastPathComponent }
     }
 
     /// The open files at or inside `url` that have unsaved changes.
@@ -854,7 +860,12 @@ final class Workspace: ObservableObject {
             document.isDirty = false
             close(document)
         }
-        let path = url.path, folder = root.standardizedFileURL.path
+        reloadIfConcerned(by: url)
+    }
+
+    /// Reloads the files when `url` is this window's folder, inside it, or holds it.
+    func reloadIfConcerned(by url: URL) {
+        let path = url.standardizedFileURL.path, folder = root.standardizedFileURL.path
         if path == folder || path.hasPrefix(folder + "/") || folder.hasPrefix(path + "/") { reloadTree() }
     }
 
@@ -883,10 +894,24 @@ final class Workspace: ObservableObject {
             return
         }
         breakTypingUndo()
-        fileUndo.registerUndo(withTarget: self) { $0.moveToTrash(original) }
+        fileUndo.registerUndo(withTarget: self) { $0.trashAgain(original) }
         fileUndo.setActionName("Move to Trash")
         reveal(original)
-        reloadTree()
+        for workspace in everyWorkspace { workspace.reloadIfConcerned(by: original) }
+    }
+
+    /// Redo of a put-back: the Trash again, asking first if a window has unsaved text in it now,
+    /// since the tabs close and it would be lost. Cancel leaves it, and drops the redo.
+    private func trashAgain(_ url: URL) {
+        if let warning = Workspace.finish([], unsaved: unsavedNames(under: url)) {
+            let alert = NSAlert()
+            alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
+            alert.informativeText = warning
+            alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            guard alert.answer() == .alertFirstButtonReturn else { return }
+        }
+        moveToTrash(url)
     }
 
     /// What would be lost if `path` went to the Trash and the Trash were emptied, or nil if
