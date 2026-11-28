@@ -118,15 +118,22 @@ struct Project: Identifiable, Equatable {
     /// `inspected()`, plus what only exists in this folder: commits on any branch, or on a detached
     /// HEAD, that no branch on a remote has, and stashes. Each remote is asked which branches it has
     /// deleted since the last fetch, and those don't count as pushed. Runs off the main thread, and
-    /// can take as long as a round trip to each remote.
+    /// can take as long as the slowest remote, as they're asked side by side.
     func inspectedForTrash() -> Project {
         var project = inspected()
         guard project.isRead else { return project }
-        var gone: [String] = []
-        let remotes = Shell.run("/usr/bin/env", ["git", "remote"], in: url, mergingErrors: false)
-        for remote in remotes.output.split(separator: "\n").map(String.init) where remotes.status == 0 {
-            let pruned = Shell.run("/usr/bin/env", ["git", "remote", "prune", "--dry-run", remote], in: url,
+        let listed = Shell.run("/usr/bin/env", ["git", "remote"], in: url, mergingErrors: false)
+        let remotes = listed.status == 0 ? listed.output.split(separator: "\n").map(String.init) : []
+        var answers = [Shell.Result?](repeating: nil, count: remotes.count)
+        let lock = NSLock()
+        let url = self.url
+        DispatchQueue.concurrentPerform(iterations: remotes.count) { index in
+            let pruned = Shell.run("/usr/bin/env", ["git", "remote", "prune", "--dry-run", remotes[index]], in: url,
                                    mergingErrors: false, timeout: Project.remoteTimeout)
+            lock.withLock { answers[index] = pruned }
+        }
+        var gone: [String] = []
+        for case let pruned? in answers {
             if pruned.status == 0 { gone += Project.goneBranches(inPruneOutput: pruned.output) } else { project.remoteUnchecked = true }
         }
         // A repository with no commits has no HEAD to count from.

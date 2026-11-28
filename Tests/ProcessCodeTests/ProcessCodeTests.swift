@@ -570,6 +570,16 @@ final class ProjectTests: XCTestCase {
                           "a tool that dies of a signal by itself isn't reported as too slow")
     }
 
+    func testAHungToolIsStoppedEvenIfItsChildHoldsTheOutput() {
+        // As git does with ssh: a child that inherits the tool's output and outlives it.
+        for merging in [true, false] {
+            let start = Date()
+            let result = Shell.run("/bin/sh", ["-c", "sleep 20 & sleep 20"], mergingErrors: merging, timeout: 0.5)
+            XCTAssertEqual(result.status, 124)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 5, "merging errors: \(merging)")
+        }
+    }
+
     func testOnlyARepositoryHoldingNoOtherProjectGoesToTheTrash() {
         let listed = ["/r/app", "/r/app/inner", "/r/other", "/elsewhere/notes"]
         XCTAssertNil(ProjectStore.trashRefusal(for: Project(path: "/r/other"), root: "/r", listed: listed))
@@ -688,6 +698,25 @@ final class ProjectTests: XCTestCase {
         XCTAssertTrue(asked)
         XCTAssertEqual(reports.count, 1, "the refusal is reported after the question")
         XCTAssertTrue(FileManager.default.fileExists(atPath: made.path))
+    }
+
+    /// Remotes that are slow to answer are asked side by side, so the question waits for the slowest
+    /// one, not for all of them in turn.
+    func testSlowRemotesAreAskedSideBySide() throws {
+        let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let repo = try ProjectStore.create(name: "repo", readme: true, in: base.path).get()
+        for name in ["one", "two"] {
+            XCTAssertEqual(Shell.run("/usr/bin/env", ["git", "remote", "add", name, "ssh://example.invalid/\(name).git"], in: repo).status, 0)
+        }
+        // Each remote is slow to fail, as an unreachable host is. Git tries it twice, so 4 s each.
+        let saved = ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"]
+        setenv("GIT_SSH_COMMAND", "sleep 2; false", 1)
+        defer { if let saved { setenv("GIT_SSH_COMMAND", saved, 1) } else { unsetenv("GIT_SSH_COMMAND") } }
+        let start = Date()
+        let project = Project(path: repo.path).inspectedForTrash()
+        XCTAssertTrue(project.remoteUnchecked)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 6.5, "about 4 s, not 8")
     }
 
     func testGoneBranchesAreReadFromPrune() {
