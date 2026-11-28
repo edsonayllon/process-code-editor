@@ -168,7 +168,7 @@ final class Workspace: ObservableObject {
         // off. One started later, in a new tab, starts fresh.
         let agent = launchAgent ? Settings.shared.agent : nil
         newTerminal(agent: agent, resume: Workspace.remembersState && Settings.shared.continueConversation
-                    && agent?.hasConversation(in: self.root) == true)
+                    && agent?.hasConversation(in: self.root) == true, startedWithFolder: true)
     }
 
     func close() {
@@ -511,8 +511,8 @@ final class Workspace: ObservableObject {
     // MARK: Terminal
 
     @discardableResult
-    func newTerminal(agent: Agent? = nil, resume: Bool = false) -> TerminalSession {
-        let session = TerminalSession(directory: root, agent: agent, resume: resume)
+    func newTerminal(agent: Agent? = nil, resume: Bool = false, startedWithFolder: Bool = false) -> TerminalSession {
+        let session = TerminalSession(directory: root, agent: agent, resume: resume, startedWithFolder: startedWithFolder)
         session.onExit = { [weak self, weak session] in
             if let session { self?.remove(session) }
         }
