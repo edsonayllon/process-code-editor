@@ -279,6 +279,27 @@ final class TerminalTests: XCTestCase {
         XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, folderAgent: claude, remembers: true, startsAgent: true, continues: false))
         XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, folderAgent: claude, remembers: true, startsAgent: false, continues: true))
         XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, folderAgent: claude, remembers: false, startsAgent: true, continues: true))
+        XCTAssertFalse(TerminalSession.carriesOn(tabAgent: claude, startedWithFolder: true, laterAgentOpened: true, folderAgent: claude,
+                                                 remembers: true, startsAgent: true, continues: true),
+                       "a later tab's conversation may be the folder's latest, the one that carries on")
+    }
+
+    /// The folder's first agent tab stops counting on carrying on once another tab with the same
+    /// agent opens; a shell tab or another agent doesn't change that.
+    @MainActor
+    func testALaterAgentTabMeansTheFirstOneMayNotCarryOn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        let fake = Agent(id: "fake", name: "Fake", command: "true"), other = Agent(id: "other", name: "Other", command: "true")
+        let first = workspace.newTerminal(agent: fake, startedWithFolder: true)
+        workspace.newTerminal()
+        workspace.newTerminal(agent: other)
+        XCTAssertFalse(first.laterAgentOpened)
+        workspace.newTerminal(agent: fake)
+        XCTAssertTrue(first.laterAgentOpened)
     }
 
     func testChildrenAreReadWithTheirGroups() throws {

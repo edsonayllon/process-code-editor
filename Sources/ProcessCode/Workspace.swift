@@ -546,6 +546,9 @@ final class Workspace: ObservableObject {
     @discardableResult
     func newTerminal(agent: Agent? = nil, resume: Bool = false, startedWithFolder: Bool = false) -> TerminalSession {
         let session = TerminalSession(directory: root, agent: agent, resume: resume, startedWithFolder: startedWithFolder)
+        if let agent, !startedWithFolder {
+            for earlier in terminals where earlier.agent?.id == agent.id { earlier.laterAgentOpened = true }
+        }
         session.onExit = { [weak self, weak session] in
             if let session { self?.remove(session) }
         }

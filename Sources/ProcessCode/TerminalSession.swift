@@ -94,6 +94,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     let agent: Agent?
     /// The agent tab the folder opened with, the one whose conversation carries on when it opens again.
     let startedWithFolder: Bool
+    /// Another tab with the same agent has opened in the window since. Its conversation may be
+    /// the folder's latest, the one that carries on, so this one's may not be.
+    var laterAgentOpened = false
     @Published var title: String
     /// The agent this tab was to start isn't installed, so the tab offers to install it.
     @Published var agentMissing = false
@@ -240,7 +243,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         switch ClaudeActivity(children: TerminalSession.children(of: group), group: group) {
         case .waiting:
             let settings = Settings.shared
-            return TerminalSession.carriesOn(tabAgent: agent, startedWithFolder: startedWithFolder, folderAgent: settings.agent,
+            return TerminalSession.carriesOn(tabAgent: agent, startedWithFolder: startedWithFolder, laterAgentOpened: laterAgentOpened,
+                                             folderAgent: settings.agent,
                                              remembers: Workspace.remembersState,
                                              startsAgent: settings.startAgentOnOpen, continues: settings.continueConversation) ? nil : name
         case .unknown: return name
@@ -253,9 +257,11 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Whether a waiting agent in a tab started with `tabAgent` picks its conversation up again when
     /// the folder next opens: only the tab the folder opened with continues, and only with every
     /// setting that brings it back on. A later agent tab, or Claude Code typed into a shell tab, doesn't.
-    nonisolated static func carriesOn(tabAgent: Agent?, startedWithFolder: Bool, folderAgent: Agent?, remembers: Bool,
-                                      startsAgent: Bool, continues: Bool) -> Bool {
-        guard startedWithFolder, let tabAgent, tabAgent.resumeCommand != nil, tabAgent.id == folderAgent?.id else { return false }
+    /// Nor does the first tab once a later one with the same agent has opened: the folder carries on
+    /// its latest conversation, which may be the later tab's.
+    nonisolated static func carriesOn(tabAgent: Agent?, startedWithFolder: Bool, laterAgentOpened: Bool = false, folderAgent: Agent?,
+                                      remembers: Bool, startsAgent: Bool, continues: Bool) -> Bool {
+        guard startedWithFolder, !laterAgentOpened, let tabAgent, tabAgent.resumeCommand != nil, tabAgent.id == folderAgent?.id else { return false }
         return remembers && startsAgent && continues
     }
 
