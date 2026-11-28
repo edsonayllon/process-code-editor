@@ -1039,10 +1039,79 @@ final class ServiceTests: XCTestCase {
         editor.textView.undo(nil)
         XCTAssertEqual(editor.text, "a", "then the typing")
 
-        XCTAssertTrue(CodeTextView.undoesFiles(fileCan: true, fileChanged: 5, textCan: true, edited: 3))
-        XCTAssertFalse(CodeTextView.undoesFiles(fileCan: true, fileChanged: 3, textCan: true, edited: 5), "typing after the Trash is undone first")
-        XCTAssertTrue(CodeTextView.undoesFiles(fileCan: true, fileChanged: 3, textCan: false, edited: 5), "with no typing left, the files")
-        XCTAssertFalse(CodeTextView.undoesFiles(fileCan: false, fileChanged: 5, textCan: true, edited: 3))
+    }
+
+    /// Undo and redo go back and forth through typing and the Trash in the order they happened,
+    /// however they're interleaved: each step is ordered by when it was made, not by when its
+    /// history last changed.
+    @MainActor
+    func testUndoAndRedoKeepTheOrderOfTypingAndTheTrash() throws {
+        let root = folder.appendingPathComponent("undo-order")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let open = root.appendingPathComponent("a.txt")
+        let first = root.appendingPathComponent("b.txt"), second = root.appendingPathComponent("c.txt")
+        for file in [open, first, second] { try "x".write(to: file, atomically: true, encoding: .utf8) }
+        for arguments in [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "first"]] {
+            XCTAssertEqual(Shell.run("/usr/bin/env", ["git"] + arguments, in: root).status, 0)
+        }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        workspace.open(open)
+        let editor = try XCTUnwrap(workspace.documents.first?.editor)
+        let text = editor.textView
+        func type(_ string: String) {
+            text.setSelectedRange(NSRange(location: (text.string as NSString).length, length: 0))
+            text.insertText(string, replacementRange: text.selectedRange())
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        func trash(_ url: URL) {
+            workspace.trash(url)
+            let deadline = Date().addingTimeInterval(10)
+            while FileManager.default.fileExists(atPath: url.path), Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        }
+        func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
+        // A Trash, typing, another Trash: putting the newer file back doesn't make the older one newer than the typing.
+        trash(first)
+        type("1")
+        trash(second)
+        text.undo(nil)
+        XCTAssertTrue(exists(second))
+        text.undo(nil)
+        XCTAssertEqual(editor.text, "x", "the typing came between the two")
+        XCTAssertFalse(exists(first))
+        text.undo(nil)
+        XCTAssertTrue(exists(first))
+        text.redo(nil)
+        XCTAssertFalse(exists(first), "redo goes forward in the same order")
+        XCTAssertEqual(editor.text, "x")
+        text.redo(nil)
+        XCTAssertEqual(editor.text, "x1")
+        XCTAssertTrue(exists(second))
+        text.redo(nil)
+        XCTAssertFalse(exists(second))
+
+        // Typing, a Trash, typing: undoing the newer typing doesn't make the older typing newer than the Trash.
+        try "x".write(to: first, atomically: true, encoding: .utf8)
+        type("2")
+        trash(first)
+        type("3")
+        text.undo(nil)
+        XCTAssertEqual(editor.text, "x12", "the typing after the Trash, apart from the typing before it")
+        text.undo(nil)
+        XCTAssertTrue(exists(first), "then the Trash")
+        XCTAssertEqual(editor.text, "x12")
+        text.undo(nil)
+        XCTAssertEqual(editor.text, "x1")
+
+        XCTAssertTrue(CodeTextView.undoesFiles(files: 5, text: 3, redo: false))
+        XCTAssertFalse(CodeTextView.undoesFiles(files: 3, text: 5, redo: false), "typing after the Trash is undone first")
+        XCTAssertTrue(CodeTextView.undoesFiles(files: 3, text: nil, redo: false), "with no typing left, the files")
+        XCTAssertFalse(CodeTextView.undoesFiles(files: nil, text: 3, redo: false))
+        XCTAssertTrue(CodeTextView.undoesFiles(files: 3, text: 5, redo: true), "the older step, undone last, is redone first")
     }
 
     @MainActor

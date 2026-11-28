@@ -103,9 +103,7 @@ final class Workspace: ObservableObject {
     weak var window: NSWindow?
     /// Undo for what's done to files in the sidebar (moving them to the Trash). Each editor keeps
     /// its own history for its text.
-    let fileUndo = UndoManager()
-    /// When a file last went to the Trash or came back, on the clock editors' typing uses.
-    private(set) var fileChanged = 0
+    let fileUndo = ClockedUndoManager()
 
     var activeDocument: Document? { documents.first { $0.id == activeDocumentID } }
     var sideDocument: Document? { documents.first { $0.id == sideDocumentID } }
@@ -398,7 +396,7 @@ final class Workspace: ObservableObject {
 
     private func add(_ document: Document) {
         if Workspace.remembersState { document.draftRoot = root }
-        document.editor?.textView.fileUndo = { [weak self] in self.map { ($0.fileUndo, $0.fileChanged) } }
+        document.editor?.textView.fileUndo = { [weak self] in self?.fileUndo }
         documents.append(document)
         // A change inside a document (its dirty mark) redraws the tab bar.
         documentObservers[document.id] = document.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -747,11 +745,16 @@ final class Workspace: ObservableObject {
         }
         reloadTree()
         if let trashed = trashed as URL? {
+            breakTypingUndo()
             fileUndo.registerUndo(withTarget: self) { $0.putBack(trashed, to: url) }
             fileUndo.setActionName("Move to Trash")
-            // Newer than any typing, so ⌘Z puts it back even from an editor.
-            fileChanged = UndoClock.tick()
         }
+    }
+
+    /// Ends the typing being gathered into one undo step in each open file, so typing after a
+    /// change to the files is a step of its own, and ⌘Z can put the two in order.
+    private func breakTypingUndo() {
+        for document in documents { document.editor?.textView.breakUndoCoalescing() }
     }
 
     /// Takes a file back out of the Trash, unless something has taken its place.
@@ -772,9 +775,9 @@ final class Workspace: ObservableObject {
             Workspace.report(error, title: title)
             return
         }
+        breakTypingUndo()
         fileUndo.registerUndo(withTarget: self) { $0.moveToTrash(original) }
         fileUndo.setActionName("Move to Trash")
-        fileChanged = UndoClock.tick()
         reveal(original)
         reloadTree()
     }
