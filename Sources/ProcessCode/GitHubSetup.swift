@@ -67,11 +67,41 @@ extension ProjectStore {
         process.standardOutput = output
         process.standardError = output
         process.standardInput = FileHandle.nullDevice
-        var said = ""
-        output.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = String(decoding: handle.availableData, as: UTF8.self)
+        // gh's last words (why it failed) may still be in the pipe when it exits, so the outcome
+        // waits for both its exit and the end of its output, or 2 seconds after the exit if
+        // something it started keeps the output open.
+        var said = "", status: Int32?, outputEnded = false, done = false
+        func finishIfDone(_ store: ProjectStore) {
+            guard let status, outputEnded, !done else { return }
+            done = true
+            output.fileHandleForReading.readabilityHandler = nil
+            store.signIn = nil
+            if store.signInCancelled {
+                store.setupStep = .idle
+            } else if status == 0 {
+                store.setupStep = .working("Finishing sign-in…")
+                DispatchQueue.global(qos: .userInitiated).async { [weak store] in
+                    // So git pushes and pulls over HTTPS with the same sign-in.
+                    Shell.run("/usr/bin/env", ["gh", "auth", "setup-git"], timeout: ProjectStore.ghTimeout)
+                    DispatchQueue.main.async { [weak store] in
+                        store?.setupStep = .idle
+                        store?.recheckGitHub(signedIn: true)
+                    }
+                }
+            } else {
+                store.setupStep = .failed(ProjectStore.explain(Shell.Result(status: status, output: said), tool: "gh"))
+            }
+        }
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            let chunk = String(decoding: data, as: UTF8.self)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                guard !data.isEmpty else {
+                    outputEnded = true
+                    return finishIfDone(self)
+                }
                 said += chunk
                 if self.setupStep == .signingIn(code: nil), let code = ProjectStore.deviceCode(in: said) {
                     self.setupStep = .signingIn(code: code)
@@ -80,26 +110,14 @@ extension ProjectStore {
                 }
             }
         }
-        process.terminationHandler = { finished in
-            let status = finished.terminationStatus
+        process.terminationHandler = { [weak self] finished in
+            let exit = finished.terminationStatus
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                output.fileHandleForReading.readabilityHandler = nil
-                self.signIn = nil
-                if self.signInCancelled {
-                    self.setupStep = .idle
-                } else if status == 0 {
-                    self.setupStep = .working("Finishing sign-in…")
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        // So git pushes and pulls over HTTPS with the same sign-in.
-                        Shell.run("/usr/bin/env", ["gh", "auth", "setup-git"], timeout: ProjectStore.ghTimeout)
-                        DispatchQueue.main.async { [weak self] in
-                            self?.setupStep = .idle
-                            self?.recheckGitHub(signedIn: true)
-                        }
-                    }
-                } else {
-                    self.setupStep = .failed(ProjectStore.explain(Shell.Result(status: status, output: said), tool: "gh"))
+                status = exit
+                if let self { finishIfDone(self) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    outputEnded = true
+                    if let self { finishIfDone(self) }
                 }
             }
         }

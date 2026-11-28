@@ -1629,6 +1629,8 @@ final class ServiceTests: AppTestCase {
 
     /// A stand-in for gh, first on the PATH: signing in prints a code and waits a moment, then
     /// succeeds or fails; everything else succeeds.
+    /// A stand-in gh. A sign-in that fails says why only after gh has exited, as its last words can
+    /// still be in the pipe when it ends.
     private func fakeGitHubCLI(signInSucceeds: Bool) throws -> String {
         let bin = folder.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -1637,7 +1639,7 @@ final class ServiceTests: AppTestCase {
         if [ "$1 $2" = "auth login" ]; then
           echo "! One-time code (AB12-CD34) copied to clipboard"
           sleep 1
-          \(signInSucceeds ? "exit 0" : "echo 'error: the code expired'; exit 1")
+          \(signInSucceeds ? "exit 0" : "(sleep 0.3; echo 'error: the code expired') & exit 1")
         fi
         [ "$1 $2" = "repo list" ] && echo "[]"
         exit 0
