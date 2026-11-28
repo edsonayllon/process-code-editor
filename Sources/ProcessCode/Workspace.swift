@@ -777,8 +777,11 @@ final class Workspace: ObservableObject {
                 defer { self.trashing.remove(path) }
                 // Gone while git answered, with the folder holding it, say: nothing to ask or move.
                 guard Workspace.exists(url) else { return }
-                // Read now, after git, so text typed meanwhile counts.
-                let unsaved = self.documents(under: url).filter(\.isDirty).map(\.name)
+                // Read now, after git, so text typed meanwhile counts, in every window: one open on
+                // a folder inside this one may have it open too. A file open in two counts once.
+                var seen = Set<String>()
+                let unsaved = self.everyWorkspace.flatMap { $0.documents(under: url) }
+                    .filter { $0.isDirty && seen.insert($0.url.path).inserted }.map(\.name)
                 if let warning = Workspace.trashWarning(path: path, isDirectory: isDirectory, status: status, unsaved: unsaved) {
                     let alert = NSAlert()
                     alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
@@ -800,6 +803,15 @@ final class Workspace: ObservableObject {
     /// How long git may take to say what a move to the Trash would lose before the question says it couldn't tell.
     nonisolated static let trashGitTimeout: TimeInterval = 10
 
+    /// The open windows' workspaces, set by the app.
+    nonisolated(unsafe) static var openWorkspaces: () -> [Workspace] = { [] }
+
+    /// Every open window's workspace, this one included.
+    private var everyWorkspace: [Workspace] {
+        let all = Workspace.openWorkspaces()
+        return all.contains { $0 === self } ? all : all + [self]
+    }
+
     private func documents(under url: URL) -> [Document] {
         documents.filter { $0.url.path == url.path || $0.url.path.hasPrefix(url.path + "/") }
     }
@@ -816,15 +828,16 @@ final class Workspace: ObservableObject {
     }
 
     private func moveToTrash(_ url: URL) {
-        var trashed: NSURL?
+        let trashed: URL?
         do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+            trashed = try Trash.move(url)
         } catch {
             Workspace.report(error, title: "Couldn't move “\(url.lastPathComponent)” to the Trash")
             return
         }
-        closeTrashed(url)
-        if let trashed = trashed as URL? {
+        // Every window closes its tabs for it, as the question asked about all of them.
+        for workspace in everyWorkspace { workspace.closeTrashed(url) }
+        if let trashed {
             breakTypingUndo()
             fileUndo.registerUndo(withTarget: self) { $0.putBack(trashed, to: url) }
             fileUndo.setActionName("Move to Trash")
@@ -833,13 +846,16 @@ final class Workspace: ObservableObject {
 
     /// Closes the tabs of the files at or inside `url`, which went to the Trash, and lets their
     /// unsaved changes go, as the question before the move said.
+    /// Only a window whose folder held it, or lay inside it, reloads its files.
     func closeTrashed(_ url: URL) {
-        for document in documents(under: url.standardizedFileURL) {
+        let url = url.standardizedFileURL
+        for document in documents(under: url) {
             document.discardDraft()
             document.isDirty = false
             close(document)
         }
-        reloadTree()
+        let path = url.path, folder = root.standardizedFileURL.path
+        if path == folder || path.hasPrefix(folder + "/") || folder.hasPrefix(path + "/") { reloadTree() }
     }
 
     /// Ends the typing being gathered into one undo step in each open file, so typing after a
@@ -983,6 +999,17 @@ final class Workspace: ObservableObject {
         guard alert.answer() == .alertFirstButtonReturn else { return nil }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
+    }
+}
+
+/// Moving to the Trash, in one place.
+enum Trash {
+    /// Moves an item to the Trash and says where it went. Tests move it to a folder of their own
+    /// instead (AppTestCase), so the real Trash never fills with what they make.
+    nonisolated(unsafe) static var move: (URL) throws -> URL? = { url in
+        var trashed: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+        return trashed as URL?
     }
 }
 

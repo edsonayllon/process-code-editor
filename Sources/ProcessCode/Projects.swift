@@ -544,7 +544,7 @@ final class ProjectStore: ObservableObject {
     func moveToTrash(_ project: Project) -> String? {
         if let refusal = trashRefusal(for: project) { return refusal }
         do {
-            try FileManager.default.trashItem(at: project.url, resultingItemURL: nil)
+            _ = try Trash.move(project.url)
         } catch {
             return error.localizedDescription
         }

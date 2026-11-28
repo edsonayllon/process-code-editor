@@ -221,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         launchOptions = LaunchOptions(arguments: Array(CommandLine.arguments.dropFirst()))
         // A window set up for a picture leaves no trace in what the app remembers.
         Workspace.remembersState = launchOptions.snapshot == nil
+        Workspace.openWorkspaces = { [weak self] in self?.controllers.map(\.workspace) ?? [] }
         Settings.shared.applyAppearance()
         if let appearance = launchOptions.appearance {
             NSApp.appearance = appearance == .system ? nil : NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
