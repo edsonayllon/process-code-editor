@@ -395,9 +395,14 @@ final class Workspace: ObservableObject {
     // MARK: Documents
 
     private func add(_ document: Document) {
+        adopt(document)
+        documents.append(document)
+    }
+
+    /// Ties a document to this window: its drafts, ⌘Z for the files, and the tab bar.
+    private func adopt(_ document: Document) {
         if Workspace.remembersState { document.draftRoot = root }
         document.editor?.textView.fileUndo = { [weak self] in self?.fileUndo }
-        documents.append(document)
         // A change inside a document (its dirty mark) redraws the tab bar.
         documentObservers[document.id] = document.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
@@ -405,8 +410,7 @@ final class Workspace: ObservableObject {
     /// Puts `new` in the tab `old` had, in its pane.
     private func replace(_ old: Document, with new: Document) {
         guard let index = documents.firstIndex(where: { $0 === old }) else { return }
-        add(new)
-        documents.removeLast()
+        adopt(new)
         documents[index] = new
         documentObservers[old.id] = nil
         if activeDocumentID == old.id { activeDocumentID = new.id }

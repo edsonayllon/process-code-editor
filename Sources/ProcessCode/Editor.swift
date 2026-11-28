@@ -145,8 +145,8 @@ final class CodeTextView: NSTextView {
     private func history(redo: Bool) -> UndoManager? {
         let own = undoManager
         guard let files = fileUndo?() else { return own }
+        // An editor's own history is always a ClockedUndoManager (undoManager(for:)).
         let text = (own as? ClockedUndoManager)?.time(redo: redo)
-            ?? ((redo ? own?.canRedo : own?.canUndo) == true ? Int.max : nil)
         return CodeTextView.undoesFiles(files: files.time(redo: redo), text: text, redo: redo) ? files : own
     }
 

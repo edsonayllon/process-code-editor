@@ -164,7 +164,7 @@ struct ProjectsView: View {
                             // Only repositories, and not one with a window on it or inside it: close the window first.
                             if project.isRepository {
                                 Button("Move to Trash…") { confirmTrash(project) }
-                                    .disabled(isOpen(project.path) || store.trashRefusal(for: project) != nil)
+                                    .disabled(store.trashRefusal(for: project) != nil)
                             }
                         }
                     }
