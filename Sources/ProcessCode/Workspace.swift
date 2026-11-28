@@ -451,21 +451,16 @@ final class Workspace: ObservableObject {
         case save, discard, cancel
     }
 
-    /// The answer to the unsaved-changes question under tests, where nobody can answer it: Don't
-    /// Save unless a test says otherwise, which leaves the test's files as they are.
-    nonisolated(unsafe) static var unsavedAnswerUnderTests = UnsavedAnswer.discard
-
     /// Asks what to do with a tab's unsaved changes. Nil if it has none.
     private func askAboutChanges(_ document: Document) -> UnsavedAnswer? {
         guard document.isDirty else { return nil }
-        if runningTests { return Workspace.unsavedAnswerUnderTests }
         let alert = NSAlert()
         alert.messageText = "Save the changes to “\(document.name)”?"
         alert.informativeText = "Your changes will be lost if you don't save them."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Don't Save")
-        switch alert.runModal() {
+        switch alert.answer() {
         case .alertFirstButtonReturn: return .save
         case .alertSecondButtonReturn: return .cancel
         default: return .discard
@@ -991,22 +986,19 @@ final class Workspace: ObservableObject {
     }
 }
 
-/// Whether this process is a test run (XCTest is loaded).
-let runningTests = NSClassFromString("XCTestCase") != nil
-
 extension NSAlert {
-    /// Shows the question and waits for its answer. Under tests nobody can answer, and the
-    /// question would stay on screen and hang the run until closed by hand, so it gets
-    /// `underTests` instead: the second button, Cancel, unless the caller says otherwise, so
-    /// nothing changes.
-    func answer(underTests: NSApplication.ModalResponse = .alertSecondButtonReturn) -> NSApplication.ModalResponse {
-        runningTests ? underTests : runModal()
-    }
+    /// How a question gets its answer: from whoever is at the screen. Tests answer instead
+    /// (AppTestCase), since a question nobody can answer stays on screen and hangs the run.
+    nonisolated(unsafe) static var answering: @MainActor (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+
+    /// Shows the question and waits for its answer.
+    func answer() -> NSApplication.ModalResponse { NSAlert.answering(self) }
 }
 
 extension NSSavePanel {
-    /// Shows the panel and waits for a choice; Cancel under tests, where nobody can choose.
-    func choose() -> NSApplication.ModalResponse {
-        runningTests ? .cancel : runModal()
-    }
+    /// How a file panel gets its choice: from whoever is at the screen, or a test.
+    nonisolated(unsafe) static var choosing: @MainActor (NSSavePanel) -> NSApplication.ModalResponse = { $0.runModal() }
+
+    /// Shows the panel and waits for a choice.
+    func choose() -> NSApplication.ModalResponse { NSSavePanel.choosing(self) }
 }

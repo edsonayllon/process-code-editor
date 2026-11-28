@@ -1,7 +1,26 @@
 import XCTest
 @testable import ProcessCode
 
-final class GitStatusTests: XCTestCase {
+/// What every test class here builds on. A question or file panel can't be answered in a test, and
+/// would stay on screen and hang the run, so each one gets an answer that changes nothing: Don't
+/// Save or Cancel where the question has one, and Cancel for a panel. A test that needs another
+/// answer sets `NSAlert.answering` itself; the next test starts over.
+class AppTestCase: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        NSAlert.answering = { AppTestCase.press(["Don't Save", "Cancel"], in: $0) }
+        NSSavePanel.choosing = { _ in .cancel }
+    }
+
+    /// The first of `titles` that the question has as a button, or else its first button.
+    @MainActor static func press(_ titles: [String], in alert: NSAlert) -> NSApplication.ModalResponse {
+        let buttons = alert.buttons.map(\.title)
+        let index = titles.lazy.compactMap { buttons.firstIndex(of: $0) }.first ?? 0
+        return NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + index)
+    }
+}
+
+final class GitStatusTests: AppTestCase {
     func testParsesBranchAndStates() {
         let output = ["## main...origin/main [ahead 2, behind 1]", " M Sources/App.swift", "?? notes/", "A  new.txt",
                       "R  renamed.swift", "old.swift", " D gone.md", "UU both.txt", "!! build/"].joined(separator: "\0") + "\0"
@@ -42,7 +61,7 @@ final class GitStatusTests: XCTestCase {
     }
 }
 
-final class LexerTests: XCTestCase {
+final class LexerTests: AppTestCase {
     private func tokens(_ text: String, _ language: Language) -> [(String, Token)] {
         Lexer.tokenize(text, language: language).map { ((text as NSString).substring(with: NSRange(location: $0.location, length: $0.length)), $0.token) }
     }
@@ -133,7 +152,7 @@ final class LexerTests: XCTestCase {
     }
 }
 
-final class MarkdownTests: XCTestCase {
+final class MarkdownTests: AppTestCase {
     func testRendersGitHubFlavour() {
         let html = Markdown.html("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n\n~~gone~~ <img src=\"logo.png\">")
         XCTAssertTrue(html.contains("<h1>Title</h1>"))
@@ -150,7 +169,7 @@ final class MarkdownTests: XCTestCase {
     }
 }
 
-final class LatexTests: XCTestCase {
+final class LatexTests: AppTestCase {
     func testReadsLatexWorkshopRecipe() throws {
         let settings = """
         {
@@ -189,7 +208,7 @@ final class LatexTests: XCTestCase {
     }
 }
 
-final class TerminalTests: XCTestCase {
+final class TerminalTests: AppTestCase {
     func testShellEscaping() {
         XCTAssertEqual(LeanTerminalView.shellEscaped("/a/b-c_d.png"), "/a/b-c_d.png")
         XCTAssertEqual(LeanTerminalView.shellEscaped("/a/Screen Shot.png"), "'/a/Screen Shot.png'")
@@ -414,7 +433,7 @@ final class TerminalTests: XCTestCase {
     }
 }
 
-final class WorkspaceTests: XCTestCase {
+final class WorkspaceTests: AppTestCase {
     @MainActor
     func testDraggingTheSplitHandleReportsHowFarItMoved() throws {
         let view = SplitHandle.HandleView(frame: NSRect(x: 0, y: 0, width: 400, height: SplitHandle.thickness))
@@ -573,7 +592,7 @@ final class WorkspaceTests: XCTestCase {
     }
 }
 
-final class ProjectTests: XCTestCase {
+final class ProjectTests: AppTestCase {
     func testReadsStatus() {
         var project = Project(path: "/r/app")
         project.read(status: "# branch.oid abc\n# branch.head feature/x\n# branch.upstream origin/feature/x\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 a b file.swift\n? new.txt\n")
@@ -898,11 +917,12 @@ final class ProjectTests: XCTestCase {
     }
 }
 
-final class ServiceTests: XCTestCase {
+final class ServiceTests: AppTestCase {
     private var folder: URL!
     private var savedDrafts: URL!
 
     override func setUp() {
+        super.setUp()
         folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         savedDrafts = Drafts.folder
@@ -1183,8 +1203,8 @@ final class ServiceTests: XCTestCase {
         for document in workspace.documents + inner.documents where document.isDirty { document.reload() }
     }
 
-    /// Under tests nobody can answer a question on screen, so each one answers by itself and
-    /// changes nothing, instead of waiting there and hanging the run.
+    /// In tests nobody can answer a question on screen, so each one gets an answer that changes
+    /// nothing (AppTestCase), instead of waiting there and hanging the run.
     @MainActor
     func testQuestionsAnswerThemselvesUnderTests() throws {
         XCTAssertNil(Workspace.ask("Rename", detail: "", value: "a", action: "Rename"), "a name asked for is cancelled")
@@ -1523,8 +1543,8 @@ final class ServiceTests: XCTestCase {
         let paper = root.appendingPathComponent("paper.tex"), taken = root.appendingPathComponent("essay.tex")
         for file in [paper, taken] { try "\\documentclass{article}".write(to: file, atomically: true, encoding: .utf8) }
         Workspace.toldInstead = { _, _ in }
-        Workspace.unsavedAnswerUnderTests = .save
-        defer { Workspace.toldInstead = nil; Workspace.unsavedAnswerUnderTests = .discard }
+        NSAlert.answering = { AppTestCase.press(["Save"], in: $0) }
+        defer { Workspace.toldInstead = nil }
         let workspace = Workspace(root: root, launchAgent: false)
         defer { workspace.close() }
         workspace.open(paper)
