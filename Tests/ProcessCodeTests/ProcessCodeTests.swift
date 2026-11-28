@@ -1139,6 +1139,39 @@ final class ServiceTests: XCTestCase {
         for document in workspace.documents where document.isDirty { document.reload() }
     }
 
+    /// Under tests nobody can answer a question on screen, so each one answers by itself and
+    /// changes nothing, instead of waiting there and hanging the run.
+    @MainActor
+    func testQuestionsAnswerThemselvesUnderTests() throws {
+        XCTAssertNil(Workspace.ask("Rename", detail: "", value: "a", action: "Rename"), "a name asked for is cancelled")
+        XCTAssertEqual(NSOpenPanel().choose(), .cancel)
+
+        let root = folder.appendingPathComponent("questions")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("a.txt")
+        try "x".write(to: file, atomically: true, encoding: .utf8)
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        workspace.open(file)
+        let document = try XCTUnwrap(workspace.documents.first)
+        try XCTUnwrap(document.editor).textView.insertText("!", replacementRange: NSRange(location: 1, length: 0))
+        XCTAssertTrue(document.isDirty)
+
+        // Not a git repository and unsaved: the Trash asks, and Cancel keeps the file.
+        workspace.trash(file)
+        let deadline = Date().addingTimeInterval(10)
+        while !workspace.trashing.isEmpty, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(workspace.trashing.isEmpty)
+        XCTAssertTrue(Workspace.exists(file), "the Trash question is cancelled")
+
+        // Closing asks about the unsaved change, and Don't Save leaves the file as it was.
+        XCTAssertTrue(workspace.close(document))
+        XCTAssertTrue(workspace.documents.isEmpty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "x")
+    }
+
     /// A folder and then a file inside it, both sent to the Trash before git answers: if the
     /// folder goes first, the file went with it, so its own move neither asks nor fails.
     @MainActor

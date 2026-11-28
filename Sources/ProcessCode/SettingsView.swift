@@ -14,7 +14,7 @@ struct SettingsView: View {
         panel.canCreateDirectories = true
         panel.prompt = "Choose"
         panel.directoryURL = URL(fileURLWithPath: projects.rootPath)
-        if panel.runModal() == .OK, let url = panel.url { projects.rootPath = url.standardizedFileURL.path }
+        if panel.choose() == .OK, let url = panel.url { projects.rootPath = url.standardizedFileURL.path }
     }
 
     var body: some View {

@@ -79,7 +79,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSM
             alert.informativeText = Workspace.runningWarning(running, closing: "the window")
             alert.addButton(withTitle: "Close")
             alert.addButton(withTitle: "Cancel")
-            if alert.runModal() != .alertFirstButtonReturn { return false }
+            if alert.answer() != .alertFirstButtonReturn { return false }
         }
         return true
     }
@@ -497,7 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         panel.prompt = "Open"
         let projects = URL(fileURLWithPath: ProjectStore.shared.rootPath)
         if recents.isEmpty, FileManager.default.fileExists(atPath: projects.path) { panel.directoryURL = projects }
-        if panel.runModal() == .OK, let url = panel.url { open(url) }
+        if panel.choose() == .OK, let url = panel.url { open(url) }
     }
 
     @objc func newFile(_ sender: Any?) { workspace?.newItem(directory: false) }

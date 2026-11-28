@@ -220,14 +220,14 @@ struct ProjectsView: View {
                                                           unsavedOpen: store.unsavedInWindows(project.url))
         alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        return alert.answer() == .alertFirstButtonReturn
     }
 
     private static func reportTrashFailure(_ message: String) {
         let alert = NSAlert()
         alert.messageText = "Couldn't move it to the Trash"
         alert.informativeText = message
-        alert.runModal()
+        _ = alert.answer()
     }
 }
 

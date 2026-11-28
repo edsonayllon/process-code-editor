@@ -456,7 +456,8 @@ final class Workspace: ObservableObject {
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Don't Save")
-        switch alert.runModal() {
+        // Under tests, Don't Save: it leaves the test's files as they are.
+        switch alert.answer(underTests: .alertThirdButtonReturn) {
         case .alertFirstButtonReturn: return .save
         case .alertSecondButtonReturn: return .cancel
         default: return .discard
@@ -598,7 +599,7 @@ final class Workspace: ObservableObject {
             alert.informativeText = Workspace.runningWarning([running], closing: "this terminal")
             alert.addButton(withTitle: "Close")
             alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard alert.answer() == .alertFirstButtonReturn else { return }
         }
         session.terminate()
         remove(session)
@@ -779,7 +780,7 @@ final class Workspace: ObservableObject {
                     alert.informativeText = warning
                     alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
                     alert.addButton(withTitle: "Cancel")
-                    guard alert.runModal() == .alertFirstButtonReturn, Workspace.exists(url) else { return }
+                    guard alert.answer() == .alertFirstButtonReturn, Workspace.exists(url) else { return }
                 }
                 self.moveToTrash(url)
             }
@@ -925,7 +926,7 @@ final class Workspace: ObservableObject {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = detail
-        alert.runModal()
+        _ = alert.answer()
     }
 
     /// What went wrong with a file, in words that point at the cause and the way out.
@@ -962,8 +963,28 @@ final class Workspace: ObservableObject {
         field.stringValue = value
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        guard alert.answer() == .alertFirstButtonReturn else { return nil }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
+    }
+}
+
+/// Whether this process is a test run (XCTest is loaded).
+let runningTests = NSClassFromString("XCTestCase") != nil
+
+extension NSAlert {
+    /// Shows the question and waits for its answer. Under tests nobody can answer, and the
+    /// question would stay on screen and hang the run until closed by hand, so it gets
+    /// `underTests` instead: the second button, Cancel, unless the caller says otherwise, so
+    /// nothing changes.
+    func answer(underTests: NSApplication.ModalResponse = .alertSecondButtonReturn) -> NSApplication.ModalResponse {
+        runningTests ? underTests : runModal()
+    }
+}
+
+extension NSSavePanel {
+    /// Shows the panel and waits for a choice; Cancel under tests, where nobody can choose.
+    func choose() -> NSApplication.ModalResponse {
+        runningTests ? .cancel : runModal()
     }
 }
