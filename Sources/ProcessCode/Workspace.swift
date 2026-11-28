@@ -95,6 +95,8 @@ final class Workspace: ObservableObject {
     private var watcher: FileWatcher?
     private var gitRefreshing = false
     private var gitRefreshPending = false
+    /// What's waiting for git before its Trash question, so a second click doesn't ask twice.
+    private var trashing: Set<String> = []
     private var documentObservers: [String: AnyCancellable] = [:]
     private let defaults = UserDefaults.standard
     /// The window this folder is open in.
@@ -685,6 +687,7 @@ final class Workspace: ObservableObject {
     func trash(_ url: URL) {
         let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
         let path = relativePath(of: url)
+        guard trashing.insert(path).inserted else { return }
         let root = self.root
         // Asked fresh, since the agent may have made the file a moment ago, and off the main thread,
         // so a slow repository can't freeze the window.
@@ -692,6 +695,7 @@ final class Workspace: ObservableObject {
             let status = Git.status(root: root, timeout: Workspace.trashGitTimeout)
             DispatchQueue.main.async {
                 guard let self else { return }
+                defer { self.trashing.remove(path) }
                 // Read now, after git, so text typed meanwhile counts.
                 let unsaved = self.documents(under: url).filter(\.isDirty).map(\.name)
                 if let warning = Workspace.trashWarning(path: path, isDirectory: isDirectory, status: status, unsaved: unsaved) {
