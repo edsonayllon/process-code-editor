@@ -70,6 +70,8 @@ struct LaunchOptions {
             case "--settings": settings = true
             case "--projects-filter": projectsFilter = value()
             case "--sheet": sheet = value()
+            // Terminals start in this home folder instead of yours: no agent, no shell setup.
+            case "--terminal-home": TerminalSession.homeOverride = value().map { ($0 as NSString).expandingTildeInPath }
             case "--return": pressReturn = true
             case "--switch-to": switchTo = value().flatMap(Appearance.init(rawValue:))
             case "--shift-return": shiftReturn = true

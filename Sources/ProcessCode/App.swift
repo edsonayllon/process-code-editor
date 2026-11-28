@@ -24,7 +24,7 @@ private final class StripSpace: NSView {
 }
 
 /// One window on one folder.
-final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
+final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     /// The top bar while it's in the title bar strip, in full screen.
     private var titleBar: NSView?
     /// Space under the full-screen toolbar strip that makes it as tall as the window's top bar.
@@ -60,30 +60,52 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         if Workspace.remembersState { window.setFrameAutosaveName("workspace." + workspace.root.path) }
         super.init(window: window)
         window.delegate = self
+        workspace.window = window
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Asks about unsaved files and running terminals before the window goes.
+    /// Asks about running terminals before the window goes. Unsaved files are kept as drafts and
+    /// reopened with the folder, so one is asked about only if its draft couldn't be kept.
     func confirmClose() -> Bool {
-        for document in workspace.documents where document.isDirty {
+        for document in workspace.documents where document.isDirty && !document.keepDraft(now: true) {
             workspace.activate(document)
             if !workspace.close(document) { return false }
         }
-        let busy = workspace.busyTerminalCount
-        if busy > 0 {
+        let running = workspace.running
+        if !running.isEmpty {
             let alert = NSAlert()
             alert.messageText = "Close “\(workspace.name)”?"
-            alert.informativeText = busy == 1 ? "A terminal still has something running. Closing the window will end it."
-                : "\(busy) terminals still have something running. Closing the window will end them."
+            alert.informativeText = Workspace.runningWarning(running, closing: "the window")
             alert.addButton(withTitle: "Close")
             alert.addButton(withTitle: "Cancel")
-            if alert.runModal() != .alertFirstButtonReturn { return false }
+            if alert.answer() != .alertFirstButtonReturn { return false }
         }
         return true
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmClose() }
+
+    // Undo outside an editor is for files: putting back what went to the Trash. Each editor
+    // answers ⌘Z itself, from its own history, or from this one when a file went to the Trash
+    // after its last edit (CodeTextView.undo).
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { workspace.fileUndo }
+
+    @objc func undo(_ sender: Any?) { workspace.fileUndo.undo() }
+    @objc func redo(_ sender: Any?) { workspace.fileUndo.redo() }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            item.title = workspace.fileUndo.undoMenuItemTitle
+            return workspace.fileUndo.canUndo
+        case #selector(redo(_:)):
+            item.title = workspace.fileUndo.redoMenuItemTitle
+            return workspace.fileUndo.canRedo
+        default:
+            return true
+        }
+    }
 
     // In full screen the toolbar is a strip of its own across the top of the screen, a window in
     // front of this one. The app's top bar moves into that strip while the window is full screen,
@@ -199,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         launchOptions = LaunchOptions(arguments: Array(CommandLine.arguments.dropFirst()))
         // A window set up for a picture leaves no trace in what the app remembers.
         Workspace.remembersState = launchOptions.snapshot == nil
+        Workspace.openWorkspaces = { [weak self] in self?.controllers.map(\.workspace) ?? [] }
         Settings.shared.applyAppearance()
         if let appearance = launchOptions.appearance {
             NSApp.appearance = appearance == .system ? nil : NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
@@ -235,6 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         terminating = true
         if Workspace.remembersState { defaults.set(controllers.map(\.workspace.root.path), forKey: "openFolders") }
         controllers.forEach { $0.workspace.close() }
+        Drafts.flush()
         return .terminateNow
     }
 
@@ -292,6 +316,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             window.backgroundColor = Theme.backgroundNS
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 560, height: 360)
+            ProjectStore.shared.openFolders = { [weak self] in self?.controllers.map(\.workspace.root.path) ?? [] }
+            // The same windows a file's Trash asks about and closes tabs in.
+            ProjectStore.shared.unsavedInWindows = { Workspace.unsavedCount(under: $0, in: Workspace.openWorkspaces()) }
+            ProjectStore.shared.closeInWindows = { folder in Workspace.openWorkspaces().forEach { $0.closeTrashed(folder) } }
             window.contentView = NSHostingView(rootView: ProjectsView(
                 isOpen: { [weak self] path in self?.controllers.contains { $0.workspace.root.path == path } ?? false },
                 open: { [weak self] in self?.open($0) },
@@ -470,7 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         panel.prompt = "Open"
         let projects = URL(fileURLWithPath: ProjectStore.shared.rootPath)
         if recents.isEmpty, FileManager.default.fileExists(atPath: projects.path) { panel.directoryURL = projects }
-        if panel.runModal() == .OK, let url = panel.url { open(url) }
+        if panel.choose() == .OK, let url = panel.url { open(url) }
     }
 
     @objc func newFile(_ sender: Any?) { workspace?.newItem(directory: false) }

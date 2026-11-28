@@ -23,10 +23,12 @@ final class Document: ObservableObject, Identifiable {
 
     static let maximumTextSize = 8_000_000
 
-    let url: URL
+    /// Where the file is. A rename that keeps its kind moves the tab along with it (`follow`).
+    private(set) var url: URL
     let kind: Kind
     let language: Language
-    var id: String { url.path }
+    /// Stays the same when the file is renamed, so the tab keeps its place.
+    let id = UUID().uuidString
     var name: String { url.lastPathComponent }
 
     @Published var isDirty = false
@@ -43,6 +45,10 @@ final class Document: ObservableObject, Identifiable {
     private(set) var video: VideoController?
     private var loadedDate: Date?
     private var previewTimer: Timer?
+    private var draftTimer: Timer?
+    /// The folder whose window this file is open in, while its unsaved text is kept as a draft.
+    /// Nil while the app is only being photographed, which leaves no trace.
+    var draftRoot: URL?
 
     var isMarkdown: Bool { language.kind == .markdown }
     var isTeX: Bool { language.kind == .tex && ["tex", "ltx"].contains(url.pathExtension.lowercased()) }
@@ -50,11 +56,16 @@ final class Document: ObservableObject, Identifiable {
     var text: String { editor?.text ?? "" }
     private var modeKey: String { isTeX ? "mode.tex" : "mode.markdown" }
 
-    init(url: URL) {
+    /// `draft` is unsaved text kept from before, for a file that's no longer on disk: the tab
+    /// opens with it, and saving puts the file back.
+    init(url: URL, draft: String? = nil) {
         self.url = url
         language = Language.forFile(url)
         var text: String?
-        if let media = Document.mediaKind(of: url) {
+        if let draft, !FileManager.default.fileExists(atPath: url.path) {
+            kind = .text
+            text = draft
+        } else if let media = Document.mediaKind(of: url) {
             kind = media
         } else if let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
             if data.count > Document.maximumTextSize {
@@ -96,6 +107,12 @@ final class Document: ObservableObject, Identifiable {
     /// The containers AVFoundation opens (MP4, QuickTime and the like; not WebM or Matroska).
     private static let playableTypes = AVURLAsset.audiovisualContentTypes
 
+    /// Whether two modification dates are the same, allowing for the rounding of a round trip through JSON.
+    static func sameDate(_ a: Date?, _ b: Date?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return abs(a.timeIntervalSince(b)) < 0.001
+    }
+
     private static func modificationDate(_ url: URL) -> Date? {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
@@ -105,6 +122,62 @@ final class Document: ObservableObject, Identifiable {
         // The preview follows typing, a beat behind.
         previewTimer?.invalidate()
         previewTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in self?.revision += 1 }
+        // The draft is kept a beat after typing stops.
+        if draftRoot != nil {
+            draftTimer?.invalidate()
+            draftTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in self?.keepDraft() }
+        }
+    }
+
+    /// Keeps the unsaved text as a draft, if there is any. `now` writes it before returning, and
+    /// says whether it was kept; false means the text would be lost without asking about it.
+    @discardableResult
+    func keepDraft(now: Bool = false) -> Bool {
+        draftTimer?.invalidate()
+        draftTimer = nil
+        guard isDirty, let editor else { return true }
+        guard let draftRoot else { return false }
+        let draft = Draft(root: draftRoot.standardizedFileURL.path, path: url.standardizedFileURL.path, text: editor.text, diskDate: loadedDate)
+        if now { return Drafts.writeNow(draft) }
+        Drafts.write(draft)
+        return true
+    }
+
+    /// Whether the tab can follow its file to `newURL` as it is: a text file whose name still makes
+    /// it the same kind of file. Another kind (a new extension, a picture, a video) opens afresh.
+    func canFollow(to newURL: URL) -> Bool {
+        kind == .text && editor != nil
+            && newURL.pathExtension.lowercased() == url.pathExtension.lowercased()
+            && Language.forFile(newURL).name == language.name
+    }
+
+    /// Follows the file to where a rename moved it, keeping the text, its undo history and the tab.
+    func follow(to newURL: URL) {
+        objectWillChange.send()
+        url = newURL
+        if isTeX { pdfURL = Latex.existingPDF(for: newURL) }
+    }
+
+    /// Forgets the draft: the text was saved, reloaded or let go.
+    func discardDraft() {
+        draftTimer?.invalidate()
+        draftTimer = nil
+        if draftRoot != nil { Drafts.remove(for: url) }
+    }
+
+    /// Puts back unsaved text kept from before. If the file on disk has changed since, the tab
+    /// says so, and Keep Mine or Reload decides. A draft that matches the file is just dropped.
+    func restore(_ draft: Draft) {
+        guard let editor else { return }
+        let onDisk = FileManager.default.fileExists(atPath: url.path)
+        if onDisk, editor.text == draft.text {
+            discardDraft()
+            return
+        }
+        if editor.text != draft.text { editor.setText(draft.text) }
+        isDirty = true
+        if onDisk, !Document.sameDate(loadedDate, draft.diskDate) { changedOnDisk = true }
+        revision += 1
     }
 
     /// Writes the text in place, keeping the file's permissions.
@@ -114,6 +187,7 @@ final class Document: ObservableObject, Identifiable {
         loadedDate = Document.modificationDate(url)
         isDirty = false
         changedOnDisk = false
+        discardDraft()
     }
 
     /// Something under the workspace changed on disk; `paths` are the files involved.
@@ -140,6 +214,7 @@ final class Document: ObservableObject, Identifiable {
         loadedDate = Document.modificationDate(url)
         isDirty = false
         changedOnDisk = false
+        discardDraft()
         revision += 1
     }
 }

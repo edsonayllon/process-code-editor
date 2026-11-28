@@ -5,6 +5,10 @@ import SwiftUI
 struct WorkspaceView: View {
     @ObservedObject var workspace: Workspace
     @ObservedObject private var settings = Settings.shared
+    /// The terminal's share of the height when a drag on its bar began.
+    @State private var dragStartFraction: CGFloat = 0
+    /// The sidebar's width when a drag on the line beside it began.
+    @State private var dragStartWidth: CGFloat = 0
 
     var body: some View {
         GeometryReader { window in
@@ -12,9 +16,7 @@ struct WorkspaceView: View {
                 if workspace.sidebarVisible {
                     SidebarView(workspace: workspace)
                         .frame(width: workspace.sidebarWidth)
-                    Divider1(axis: .vertical, onDrag: { x in
-                        workspace.sidebarWidth = min(max(x - window.frame(in: .global).minX, 200), min(480, window.size.width - 320))
-                    }, onEnd: workspace.saveState)
+                    Divider1(axis: .vertical)
                 }
                 VStack(spacing: 0) {
                     // In full screen the top bar is in the window's title bar strip instead.
@@ -23,6 +25,22 @@ struct WorkspaceView: View {
                         Divider1(axis: .horizontal).fadesInFocusMode(workspace)
                     }
                     panes
+                }
+            }
+            // The handle for the sidebar's line is laid over everything, so the sidebar and editor on
+            // each side of it can't take the pointer.
+            .overlay(alignment: .leading) {
+                if workspace.sidebarVisible {
+                    SplitHandle(axis: .vertical) { phase in
+                        switch phase {
+                        case .began: dragStartWidth = workspace.sidebarWidth
+                        case .moved(let right):
+                            workspace.sidebarWidth = min(max(dragStartWidth + right, 200), min(480, window.size.width - 320))
+                        case .ended: workspace.saveState()
+                        }
+                    }
+                    .frame(width: SplitHandle.thickness)
+                    .offset(x: workspace.sidebarWidth + 0.5 - SplitHandle.thickness / 2)
                 }
             }
         }
@@ -57,15 +75,21 @@ struct WorkspaceView: View {
                         }
                     }
                         .frame(height: workspace.terminalVisible ? max(area.size.height * (1 - workspace.terminalFraction), 80) : nil)
-                    if workspace.terminalVisible {
-                        Divider1(axis: .horizontal, onDrag: { y in
-                            let fraction = 1 - (y - area.frame(in: .global).minY) / max(area.size.height, 1)
-                            workspace.terminalFraction = min(max(fraction, 0.12), 0.88)
-                        }, onEnd: workspace.saveState)
-                    }
+                    // The handle for this line is laid over it by the terminal panel (SplitHandle).
+                    if workspace.terminalVisible { Divider1(axis: .horizontal) }
                 }
                 if workspace.terminalVisible || !workspace.editorShown {
-                    TerminalPanel(workspace: workspace, width: area.size.width)
+                    // The editor and terminal on each side of the line take the pointer, so the
+                    // handle is an AppKit strip laid over the line, above both of them.
+                    let split = workspace.editorShown && workspace.activeDocument != nil
+                    TerminalPanel(workspace: workspace, width: area.size.width, resize: split ? { phase in
+                        switch phase {
+                        case .began: dragStartFraction = workspace.terminalFraction
+                        case .moved(let down):
+                            workspace.terminalFraction = min(max(dragStartFraction - down / max(area.size.height, 1), 0.12), 0.88)
+                        case .ended: workspace.saveState()
+                        }
+                    } : nil)
                 }
             }
         }
@@ -142,6 +166,9 @@ struct TopBar: View {
                                         }
                                         Divider()
                                         Button("Close Tab") { workspace.close(document) }
+                                        Button("Close Other Tabs") { workspace.closeTabs(keeping: document) }
+                                            .disabled(workspace.documents.count < 2)
+                                        Button("Close All Tabs") { workspace.closeTabs() }
                                     }
                             }
                         }
@@ -552,6 +579,8 @@ private struct TerminalPanel: View {
     @ObservedObject var workspace: Workspace
     /// How wide the panel is, to know whether there's room for margins.
     let width: CGFloat
+    /// Dragging the line above the panel resizes the split, when there's an editor above it.
+    var resize: ((SplitHandle.Drag) -> Void)?
     @ObservedObject private var settings = Settings.shared
 
     /// The editor is showing above the terminal.
@@ -616,6 +645,7 @@ private struct TerminalPanel: View {
             .background(BarHover(workspace: workspace))
 
             if let session = workspace.activeTerminal {
+                AgentMissingBar(session: session)
                 // Under the editor the text starts where the code does; alone, the column is centred.
                 ReadableColumn(leading: underEditor ? settings.codeLeading : 12, centred: !underEditor, onMarginClick: session.focus) {
                     TerminalHost(session: session, focusToken: workspace.terminalFocusToken)
@@ -628,6 +658,14 @@ private struct TerminalPanel: View {
             }
         }
         .background(Theme.background)
+        .overlay(alignment: .top) {
+            if let resize {
+                // It covers the top of the bar, so it passes on the bar's double-click.
+                SplitHandle(resize: resize, doubleClick: { if !workspace.documents.isEmpty { workspace.toggleTerminalMaximized() } })
+                    .frame(height: SplitHandle.thickness)
+                    .offset(y: -SplitHandle.thickness / 2)
+            }
+        }
     }
 }
 
@@ -775,4 +813,106 @@ private struct BarDoubleClick: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ClickView { ClickView() }
     func updateNSView(_ view: ClickView, context: Context) { view.action = action }
+}
+
+/// The grab area for a line between panes that resizes them: a strip laid over the line, half on
+/// each side. It's an AppKit view so that it, and not the text and scroll views on either side,
+/// gets the pointer.
+struct SplitHandle: NSViewRepresentable {
+    enum Drag {
+        case began
+        /// How far the pointer has moved since the drag began, in points: down for a horizontal
+        /// line, right for a vertical one.
+        case moved(CGFloat)
+        case ended
+    }
+
+    /// How wide the grab area is, across the line.
+    static let thickness: CGFloat = 10
+
+    /// `.horizontal` is the line between editor and terminal, `.vertical` the one beside the sidebar.
+    var axis: Divider1.Axis = .horizontal
+    let resize: (Drag) -> Void
+    /// What a double-click on the lower half of a horizontal line's handle does (over the terminal's bar).
+    var doubleClick: () -> Void = {}
+
+    final class HandleView: NSView {
+        var axis: Divider1.Axis = .horizontal
+        var resize: (Drag) -> Void = { _ in }
+        var doubleClick: () -> Void = {}
+        private var start: NSPoint?
+
+        /// The first click into an inactive window grabs the line too.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            // Only the lower half lies over the bar; the upper half is over the editor.
+            if axis == .horizontal, event.clickCount == 2, convert(event.locationInWindow, from: nil).y < bounds.midY {
+                doubleClick()
+                return
+            }
+            start = event.locationInWindow
+            resize(.began)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let start else { return }
+            let point = event.locationInWindow
+            // Window coordinates grow upwards and rightwards.
+            resize(.moved(axis == .horizontal ? start.y - point.y : point.x - start.x))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard start != nil else { return }
+            start = nil
+            resize(.ended)
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: axis == .horizontal ? .resizeUpDown : .resizeLeftRight)
+        }
+    }
+
+    func makeNSView(context: Context) -> HandleView { HandleView() }
+    func updateNSView(_ view: HandleView, context: Context) {
+        if view.axis != axis {
+            view.axis = axis
+            view.window?.invalidateCursorRects(for: view)
+        }
+        view.resize = resize
+        view.doubleClick = doubleClick
+    }
+}
+
+/// Above a terminal whose agent isn't installed: what's wrong, and the button that installs it.
+private struct AgentMissingBar: View {
+    @ObservedObject var session: TerminalSession
+
+    var body: some View {
+        if session.agentMissing, let agent = session.agent {
+            HStack(spacing: 8) {
+                Text("\(agent.name) isn't installed on this Mac yet.")
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Button("Install \(agent.name)", action: session.installAgent)
+                    .help(agent.id == "claude" ? "Runs Anthropic's installer in this terminal" : "Installs it with Homebrew, or npm, in this terminal")
+                Button {
+                    session.agentMissing = false
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.tertiary)
+                .help("Hide")
+            }
+            .font(.system(size: 11))
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Theme.radius))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
 }

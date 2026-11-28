@@ -4,10 +4,176 @@ import SwiftUI
 
 // MARK: Text view
 
+/// Orders the changes in a window, so ⌘Z can undo whichever came last: typing in a file, or a
+/// file moved to the Trash.
+enum UndoClock {
+    nonisolated(unsafe) private static var count = 0
+    static func tick() -> Int {
+        count += 1
+        return count
+    }
+}
+
+/// An undo history that knows when each step in it was made, on the `UndoClock`. A step is
+/// timed when it's made, and keeps that time as undo and redo move it between the two stacks,
+/// so two histories can be ordered by the steps on top of them. Each step also remembers what it
+/// acts on, so a step that AppKit removes (a text field's, when its editing ends) takes its time
+/// with it.
+final class ClockedUndoManager: UndoManager {
+    private struct Step {
+        let time: Int
+        var targets: Set<ObjectIdentifier> = []
+    }
+
+    private var undoSteps: [Step] = []
+    private var redoSteps: [Step] = []
+    /// What a `prepare(withInvocationTarget:)` made before its group opened.
+    private var waiting: Set<ObjectIdentifier> = []
+    /// Whether the undo or redo under way registered its counterpart. One that failed (a file
+    /// that couldn't be put back) didn't, and leaves nothing to redo or undo again.
+    private var answered = false
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(opened), name: .NSUndoManagerDidOpenUndoGroup, object: self)
+        center.addObserver(self, selector: #selector(undid), name: .NSUndoManagerDidUndoChange, object: self)
+        center.addObserver(self, selector: #selector(redid), name: .NSUndoManagerDidRedoChange, object: self)
+    }
+
+    /// When the step that undo (or redo) would take was made, or nil if there's none.
+    func time(redo: Bool) -> Int? {
+        redo ? (canRedo ? redoSteps.last?.time : nil) : (canUndo ? undoSteps.last?.time : nil)
+    }
+
+    private var recording: Bool { !isUndoing && !isRedoing }
+
+    /// A group is opened for each new step, when the first change is registered in it.
+    @objc private func opened() {
+        guard recording, groupingLevel == 1 else { return }
+        undoSteps.append(Step(time: UndoClock.tick(), targets: waiting))
+        waiting = []
+        redoSteps.removeAll()
+    }
+
+    private func note(_ target: Any) {
+        guard recording else {
+            answered = true
+            return
+        }
+        let id = ObjectIdentifier(target as AnyObject)
+        if groupingLevel > 0, !undoSteps.isEmpty {
+            undoSteps[undoSteps.count - 1].targets.insert(id)
+        } else {
+            waiting.insert(id)
+        }
+    }
+
+    override func registerUndo(withTarget target: Any, selector: Selector, object anObject: Any?) {
+        super.registerUndo(withTarget: target, selector: selector, object: anObject)
+        note(target)
+    }
+
+    override func __registerUndoWithTarget(_ target: Any, handler: @escaping @MainActor (Any) -> Void) {
+        super.__registerUndoWithTarget(target, handler: handler)
+        note(target)
+    }
+
+    override func prepare(withInvocationTarget target: Any) -> Any {
+        note(target)
+        return super.prepare(withInvocationTarget: target)
+    }
+
+    @objc private func undid() {
+        if let step = undoSteps.popLast(), answered { redoSteps.append(step) }
+        answered = false
+        forgetEmpty()
+    }
+
+    @objc private func redid() {
+        if let step = redoSteps.popLast(), answered { undoSteps.append(step) }
+        answered = false
+        forgetEmpty()
+    }
+
+    override func removeAllActions() {
+        super.removeAllActions()
+        undoSteps.removeAll()
+        redoSteps.removeAll()
+    }
+
+    /// Steps that acted only on `target` go, with their times; the others no longer act on it.
+    override func removeAllActions(withTarget target: Any) {
+        super.removeAllActions(withTarget: target)
+        let id = ObjectIdentifier(target as AnyObject)
+        func without(_ steps: [Step]) -> [Step] {
+            steps.compactMap { step in
+                var step = step
+                guard step.targets.remove(id) == nil || !step.targets.isEmpty else { return nil }
+                return step
+            }
+        }
+        undoSteps = without(undoSteps)
+        redoSteps = without(redoSteps)
+        forgetEmpty()
+    }
+
+    /// A stack that's empty has no times, whatever emptied it.
+    private func forgetEmpty() {
+        if !canUndo { undoSteps.removeAll() }
+        if !canRedo { redoSteps.removeAll() }
+    }
+}
+
 /// The code text view: plain text, no substitutions, indentation that follows the line above.
 final class CodeTextView: NSTextView {
     var language = Language.plain
     var indentUnit = "    "
+    /// The window's undo for files (putting back what went to the Trash).
+    var fileUndo: (() -> ClockedUndoManager?)?
+
+    /// Whether ⌘Z (or ⇧⌘Z with `redo`) goes to the files rather than this file's text, given when
+    /// the step each would take was made: undo takes the newer, and redo the older, since it was
+    /// undone last. Either is nil when there's nothing to take.
+    nonisolated static func undoesFiles(files: Int?, text: Int?, redo: Bool) -> Bool {
+        guard let files else { return false }
+        guard let text else { return true }
+        return redo ? files < text : files > text
+    }
+
+    /// When the text's step was made, for `undoesFiles`. A history that can step but has no time
+    /// for it (AppKit took part of the step away) counts as the one to take: the newest for undo,
+    /// and the oldest for redo (undone last), so ⌘Z and ⇧⌘Z go to the typing, not a file.
+    nonisolated static func textTime(_ time: Int?, canStep: Bool, redo: Bool) -> Int? {
+        time ?? (canStep ? (redo ? Int.min : Int.max) : nil)
+    }
+
+    /// The undo history ⌘Z or ⇧⌘Z works on now.
+    private func history(redo: Bool) -> UndoManager? {
+        let own = undoManager
+        guard let files = fileUndo?() else { return own }
+        let text = CodeTextView.textTime((own as? ClockedUndoManager)?.time(redo: redo),
+                                         canStep: (redo ? own?.canRedo : own?.canUndo) == true, redo: redo)
+        return CodeTextView.undoesFiles(files: files.time(redo: redo), text: text, redo: redo) ? files : own
+    }
+
+    @objc func undo(_ sender: Any?) { history(redo: false)?.undo() }
+    @objc func redo(_ sender: Any?) { history(redo: true)?.redo() }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            let manager = history(redo: false)
+            item.title = manager?.undoMenuItemTitle ?? "Undo"
+            return manager?.canUndo ?? false
+        case #selector(redo(_:)):
+            let manager = history(redo: true)
+            item.title = manager?.redoMenuItemTitle ?? "Redo"
+            return manager?.canRedo ?? false
+        default:
+            return super.validateMenuItem(item)
+        }
+    }
 
     override func insertNewline(_ sender: Any?) {
         let text = string as NSString
@@ -209,6 +375,8 @@ final class EditorController: NSObject, NSTextViewDelegate {
 
     /// Called after every edit by the user.
     var onEdit: (() -> Void)?
+    /// This file's undo history, apart from the other files' and from the window's.
+    private let history = ClockedUndoManager()
 
     var text: String { textView.string }
 
@@ -310,6 +478,8 @@ final class EditorController: NSObject, NSTextViewDelegate {
     }
 
     func focus() { textView.window?.makeFirstResponder(textView) }
+
+    func undoManager(for view: NSTextView) -> UndoManager? { history }
 
     /// Scrolls to a 1-based line and puts the insertion point there.
     func reveal(line: Int) {

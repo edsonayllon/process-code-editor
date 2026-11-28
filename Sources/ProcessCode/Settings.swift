@@ -12,13 +12,116 @@ struct Agent: Identifiable, Equatable {
     let id: String
     let name: String
     let command: String
+    /// The command that carries on the last conversation in the folder, for an agent that keeps
+    /// its conversations where they can be found. Only Claude Code's is known to stay in the folder;
+    /// the others start fresh.
+    var resumeCommand: String? = nil
+    /// What installs the agent when it isn't found, typed into its terminal so the install is in
+    /// plain sight, then starts it. Claude Code's own installer needs nothing else. The others come
+    /// from Homebrew, or npm without it, and say what's needed when there's neither.
+    var installCommand: String? = nil
 
     static let presets = [
-        Agent(id: "claude", name: "Claude Code", command: "claude"),
-        Agent(id: "codex", name: "Codex", command: "codex"),
-        Agent(id: "gemini", name: "Gemini", command: "gemini"),
+        Agent(id: "claude", name: "Claude Code", command: "claude", resumeCommand: "claude --continue",
+              installCommand: "curl -fsSL https://claude.ai/install.sh | bash && export PATH=\"$HOME/.local/bin:$PATH\" && claude"),
+        Agent(id: "codex", name: "Codex", command: "codex",
+              installCommand: packageInstall(name: "Codex", brew: "--cask codex", npm: "@openai/codex", then: "codex")),
+        Agent(id: "gemini", name: "Gemini", command: "gemini",
+              installCommand: packageInstall(name: "Gemini", brew: "gemini-cli", npm: "@google/gemini-cli", then: "gemini")),
     ]
+
+    static func packageInstall(name: String, brew: String, npm: String, then command: String) -> String {
+        "if command -v brew >/dev/null; then brew install \(brew); elif command -v npm >/dev/null; then npm install -g \(npm); "
+            + "else echo \"\(name) installs with Homebrew (https://brew.sh) or Node (https://nodejs.org). Install one, then open a new agent tab.\"; false; fi && \(command)"
+    }
+
+    /// The program the command runs, its first word.
+    var program: String { command.split(separator: " ").first.map(String.init) ?? command }
     static let customID = "custom"
+
+    /// One of the conversations Claude Code keeps for a folder: its session, which names its
+    /// file, and when it was last written to.
+    struct Conversation: Equatable {
+        let session: String
+        let written: Date
+    }
+
+    /// The conversations with this agent in `folder`, in no order. Only Claude Code's are found.
+    func conversations(in folder: URL, home: String = TerminalSession.home) -> [Conversation] {
+        guard resumeCommand != nil, id == "claude" else { return [] }
+        // Claude Code keeps each folder's conversations in ~/.claude/projects, in a folder named
+        // after the path with everything but letters and digits made a dash. Its terminal is
+        // given no CLAUDE_CONFIG_DIR, so that's where they are. The shell may see the folder
+        // through a symlink, so each spelling is tried, the system's own included: Claude Code
+        // names it by its real path, /private/tmp for /tmp, which resolvingSymlinksInPath turns
+        // back into /tmp. A guess that's wrong costs little: the agent starts fresh when there
+        // turns out to be nothing to continue.
+        let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
+        let paths = [folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path, Agent.realPath(folder.path)].compactMap { $0 }
+        let stores = Set(paths.map { Agent.claudeFolder(for: $0, in: projects) })
+        return stores.flatMap { store in
+            ((try? FileManager.default.contentsOfDirectory(at: store, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+                // Earlier versions kept a subagent's transcript here too, as agent-<id>.jsonl.
+                .filter { $0.pathExtension == "jsonl" && !$0.lastPathComponent.hasPrefix("agent-") }
+                .map { file in
+                    Conversation(session: file.deletingPathExtension().lastPathComponent,
+                                 written: (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast)
+                }
+        }
+    }
+
+    /// The path as the system resolves it, every symlink followed (/tmp is /private/tmp), or nil
+    /// if it isn't there.
+    static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// Whether there's an earlier conversation with this agent in `folder` to carry on.
+    func hasConversation(in folder: URL, home: String = TerminalSession.home) -> Bool {
+        !conversations(in: folder, home: home).isEmpty
+    }
+
+    /// The session of the Claude Code running as process `pid`, which names the conversation it
+    /// writes, or nil if it can't be told. Claude Code keeps a note on each running copy in
+    /// ~/.claude/sessions, named by its process.
+    static func claudeSession(pid: pid_t, home: String = TerminalSession.home) -> String? {
+        let note = URL(fileURLWithPath: home).appendingPathComponent(".claude/sessions/\(pid).json")
+        guard let data = try? Data(contentsOf: note),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["pid"] as? Int == Int(pid), let session = json["sessionId"] as? String, !session.isEmpty else { return nil }
+        return session
+    }
+
+    /// Claude Code shortens a long folder name to its first 200 characters and adds its hash of
+    /// the whole path.
+    static let claudeNameLimit = 200
+
+    /// The folder in `projects` that holds the conversations for `path`.
+    static func claudeFolder(for path: String, in projects: URL) -> URL {
+        projects.appendingPathComponent(claudeFolderName(for: path))
+    }
+
+    /// Claude Code's hash of a path, as it writes it: Java's string hash over the UTF-16 units,
+    /// kept to 32 bits, without its sign.
+    static func claudeHash(_ path: String) -> Int64 {
+        var hash: Int32 = 0
+        for unit in path.utf16 { hash = (hash &<< 5) &- hash &+ Int32(unit) }
+        return abs(Int64(hash))
+    }
+
+    /// The path with every character but an ASCII letter or digit made a dash, counted as
+    /// JavaScript counts them: an emoji, two UTF-16 units, becomes two dashes.
+    /// A name longer than `claudeNameLimit` is cut there and given the hash in base 36.
+    static func claudeFolderName(for path: String) -> String {
+        let name = String(path.utf16.map { unit -> Character in
+            guard unit < 128, let scalar = Unicode.Scalar(unit), CharacterSet.alphanumerics.contains(scalar) else { return "-" }
+            return Character(scalar)
+        })
+        guard name.count > claudeNameLimit else { return name }
+        return name.prefix(claudeNameLimit) + "-" + String(claudeHash(path), radix: 36)
+    }
 }
 
 /// The few things that can be customized: appearance, the code font, and which agent starts.
@@ -41,6 +144,9 @@ final class Settings: ObservableObject {
     @Published var agentID: String { didSet { defaults.set(agentID, forKey: "agentID") } }
     @Published var customAgentCommand: String { didSet { defaults.set(customAgentCommand, forKey: "customAgentCommand") } }
     @Published var startAgentOnOpen: Bool { didSet { defaults.set(startAgentOnOpen, forKey: "startAgentOnOpen") } }
+    /// The agent that starts with a folder carries on the folder's last conversation, rather than
+    /// starting a new one. For agents that can (Claude Code).
+    @Published var continueConversation: Bool { didSet { defaults.set(continueConversation, forKey: "continueConversation") } }
 
     private let defaults: UserDefaults
 
@@ -55,6 +161,7 @@ final class Settings: ObservableObject {
         agentID = defaults.string(forKey: "agentID") ?? "claude"
         customAgentCommand = defaults.string(forKey: "customAgentCommand") ?? ""
         startAgentOnOpen = defaults.object(forKey: "startAgentOnOpen") as? Bool ?? true
+        continueConversation = defaults.object(forKey: "continueConversation") as? Bool ?? true
     }
 
     /// The font families that can be picked on this Mac.

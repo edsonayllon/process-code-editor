@@ -27,6 +27,9 @@ struct GitStatus: Equatable {
     var entries: [String: GitState] = [:]
     /// Directories that hold a change somewhere below them (no trailing slash).
     var changedDirectories: Set<String> = []
+    /// The state of everything here when the opened folder lies inside an untracked or ignored
+    /// folder of the repository, which git reports as that one folder, above the opened one.
+    var enclosingState: GitState?
 
     /// The changed files, without ignored ones, sorted by path.
     var changes: [(path: String, state: GitState)] {
@@ -40,6 +43,7 @@ struct GitStatus: Equatable {
     /// The state of a file or folder at `path` (relative, no trailing slash).
     func state(of path: String, isDirectory: Bool) -> GitState? {
         if let state = entries[isDirectory ? path + "/" : path] ?? entries[path] { return state }
+        if let enclosingState { return enclosingState }
         // Inside an untracked or ignored folder, which git reports as one entry.
         var prefix = ""
         for part in path.split(separator: "/").dropLast() {
@@ -109,14 +113,25 @@ enum Git {
     /// Reads the status of the repository holding `root`. Never takes git's index lock, so it can
     /// run while a commit or another git command is in progress.
     static func status(root: URL) -> GitStatus {
+        status(root: root, timeout: nil) ?? GitStatus()
+    }
+
+    /// The same, but nil if git didn't answer within `timeout` seconds, so the caller can tell a
+    /// slow repository from a folder that isn't one. The two calls share the time.
+    static func status(root: URL, timeout: TimeInterval?) -> GitStatus? {
+        let deadline = timeout.map { Date().addingTimeInterval($0) }
         let result = Shell.run("/usr/bin/env", ["git", "--no-optional-locks", "status", "--porcelain=v1", "-z", "--branch", "--ignored=matching"],
-                               in: root)
+                               in: root, timeout: timeout)
+        if result.status == 124 { return nil }
         guard result.status == 0 else { return GitStatus() }
         var status = GitStatus.parse(result.output)
         // Paths are relative to the repository's top level, which may be above the opened folder.
-        let top = Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-prefix"], in: root).output
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !top.isEmpty { status = status.relative(to: top) }
+        let left = deadline.map { $0.timeIntervalSinceNow }
+        if let left, left <= 0 { return nil }
+        let top = Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-prefix"], in: root, timeout: left)
+        if top.status == 124 { return nil }
+        let prefix = top.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prefix.isEmpty { status = status.relative(to: prefix) }
         return status
     }
 
@@ -134,8 +149,13 @@ extension GitStatus {
         var copy = self
         copy.entries = [:]
         copy.changedDirectories = []
-        for (path, state) in entries where path.hasPrefix(prefix) && path.count > prefix.count {
-            copy.entries[String(path.dropFirst(prefix.count))] = state
+        for (path, state) in entries {
+            if path.hasPrefix(prefix) && path.count > prefix.count {
+                copy.entries[String(path.dropFirst(prefix.count))] = state
+            } else if path.hasSuffix("/"), prefix.hasPrefix(path), state == .untracked || state == .ignored {
+                // The opened folder is inside this one, so all of it shares its state.
+                copy.enclosingState = state
+            }
         }
         for directory in changedDirectories where directory.hasPrefix(prefix) {
             copy.changedDirectories.insert(String(directory.dropFirst(prefix.count)))
@@ -165,20 +185,30 @@ enum Shell {
     }
 
     /// Runs a tool to completion and returns what it printed: stdout and stderr together, or with
-    /// `mergingErrors` off, stdout alone (and stderr alone if it failed).
+    /// `mergingErrors` off, stdout alone (and stderr alone if it failed). With a `timeout`, a tool still
+    /// running after that many seconds is stopped and the result has status 124.
     @discardableResult
-    static func run(_ tool: String, _ arguments: [String], in directory: URL? = nil, mergingErrors: Bool = true) -> Result {
+    static func run(_ tool: String, _ arguments: [String], in directory: URL? = nil, mergingErrors: Bool = true,
+                    timeout: TimeInterval? = nil, environment: [String: String]? = nil) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tool)
         process.arguments = arguments
         process.currentDirectoryURL = directory
-        process.environment = environment
+        process.environment = environment ?? self.environment
         let pipe = Pipe()
         let errorPipe = mergingErrors ? pipe : Pipe()
         process.standardOutput = pipe
         process.standardError = errorPipe
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return Result(status: -1, output: error.localizedDescription) }
+        // Whether the watchdog stopped it, as opposed to a crash or a signal from elsewhere.
+        let stopped = Flag()
+        let watchdog = DispatchWorkItem {
+            guard process.isRunning else { return }
+            stopped.set()
+            process.terminate()
+        }
+        if let timeout { DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog) }
         // Drain both pipes at once so a chatty stderr can't block the child.
         var errorData = Data()
         let group = DispatchGroup()
@@ -192,7 +222,23 @@ enum Shell {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         group.wait()
         process.waitUntilExit()
+        watchdog.cancel()
+        // Stopped by the watchdog, it was too slow, however it ended: dead of the signal, or caught
+        // it and exited with a status of its own (a shell's 143), even 0, since what it printed may
+        // be cut short. One that finished at the very moment the time ran out took all of it too.
+        if let timeout, stopped.isSet {
+            let name = arguments.first.map { tool.hasSuffix("/env") ? $0 : tool } ?? tool
+            return Result(status: 124, output: "\(name) didn't answer within \(Int(timeout)) seconds and was stopped.")
+        }
         let failedApart = !mergingErrors && process.terminationStatus != 0
         return Result(status: process.terminationStatus, output: String(decoding: failedApart ? errorData : data, as: UTF8.self))
     }
+}
+
+/// A yes-or-no that one thread sets and another reads.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.withLock { value = true } }
+    var isSet: Bool { lock.withLock { value } }
 }

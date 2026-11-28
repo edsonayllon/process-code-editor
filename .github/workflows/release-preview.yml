@@ -1,0 +1,51 @@
+# On each pull request into release, works out the version and notes scripts/release.sh would give once it's
+# merged, and posts them on the pull request. It only reads commits: releases are cut on the Mac that holds
+# the signing keys, never here.
+#
+# Cost: one Linux job of about a minute for each push to a pull request into release; none for pushes to main.
+name: Release preview
+
+on:
+  pull_request:
+    branches: [release]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: release-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        timeout-minutes: 2
+        with:
+          # Every commit and tag, back to the last release.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        timeout-minutes: 2
+        with:
+          node-version: 24
+
+      - name: Work out the release
+        timeout-minutes: 5
+        run: scripts/release-preview.sh > preview.md
+
+      - name: Show it
+        timeout-minutes: 1
+        run: cat preview.md >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment, kept up to date. A fork's pull request can't comment; its summary still shows.
+      - name: Post it on the pull request
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file preview.md --edit-last --create-if-none

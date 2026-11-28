@@ -92,7 +92,20 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     let id = UUID()
     let view = LeanTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
     let agent: Agent?
+    /// The agent tab the folder opened with, the one whose conversation carries on when it opens again.
+    let startedWithFolder: Bool
+    /// Another tab with the same agent has opened in the window since. Its conversation may be
+    /// the folder's latest, the one that carries on, so this one's may not be.
+    var laterAgentOpened = false
+    /// The folder the tab opened in.
+    let directory: URL
+    /// Whether another tab in the window is running Claude Code, asked by the workspace.
+    var otherTabRunsClaudeCode: () -> Bool = { false }
+    /// When the tab last printed anything. Written on the terminal's reading thread.
+    let lastOutput = LastOutput()
     @Published var title: String
+    /// The agent this tab was to start isn't installed, so the tab offers to install it.
+    @Published var agentMissing = false
     var onExit: (() -> Void)?
     private var observers: Set<AnyCancellable> = []
 
@@ -101,11 +114,28 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         return ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
     }
 
+    /// A home folder for terminals other than the user's own, set by `--terminal-home` to try the
+    /// app as someone who has nothing installed there yet (no agent, no shell setup).
+    nonisolated(unsafe) static var homeOverride: String?
+
+    /// The home folder terminals start with.
+    nonisolated static var home: String { homeOverride ?? NSHomeDirectory() }
+
     /// The environment for a shell: this app's, minus what belongs to whatever started the app,
     /// plus what a terminal is expected to set.
     nonisolated static func environment(_ base: [String: String] = ProcessInfo.processInfo.environment, shell: String) -> [String] {
+        variables(base, shell: shell).map { "\($0.key)=\($0.value)" }.sorted()
+    }
+
+    nonisolated static func variables(_ base: [String: String] = ProcessInfo.processInfo.environment, shell: String) -> [String: String] {
         var env = base.filter { key, _ in
             !key.hasPrefix("CLAUDE") && !key.hasPrefix("VSCODE") && !key.hasPrefix("TERM_PROGRAM") && key != "TERM_SESSION_ID"
+        }
+        if let homeOverride {
+            // As a new user's terminal: the system's PATH, and nothing set up by anyone's shell.
+            env["HOME"] = homeOverride
+            env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+            env = env.filter { key, _ in key != "ZDOTDIR" && !key.hasPrefix("NVM_") && !key.hasPrefix("HOMEBREW_") }
         }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -113,35 +143,264 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         env["SHELL"] = shell
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         if env["PATH"] == nil { env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin" }
-        return env.map { "\($0.key)=\($0.value)" }.sorted()
+        return env
     }
 
     /// The arguments that start the shell: a login shell, so the PATH is the one Terminal has
-    /// (nvm, Homebrew), and with an agent, the agent first and the shell once it exits.
-    nonisolated static func arguments(shell: String, agent: Agent?) -> [String] {
+    /// (nvm, Homebrew), and with an agent, the agent first and the shell once it exits. With
+    /// `resume`, the agent carries on its last conversation, if it knows how.
+    nonisolated static func arguments(shell: String, agent: Agent?, resume: Bool = false) -> [String] {
         guard let agent else { return ["-l"] }
-        return ["-l", "-i", "-c", "\(agent.command); exec \(LeanTerminalView.shellEscaped(shell)) -l"]
+        let command = startCommand(agent: agent, resume: resume, shell: shell)
+        return ["-l", "-i", "-c", "\(command); exec \(LeanTerminalView.shellEscaped(shell)) -l"]
     }
 
-    init(directory: URL, agent: Agent?) {
+    /// The shells whose `$?`, `$(( ))`, `[ ]` and `{ }` the fallback below is written in.
+    nonisolated static let posixShells: Set<String> = ["zsh", "bash", "sh", "ksh", "dash"]
+
+    /// How soon after starting a failed resume counts as finding nothing to carry on.
+    nonisolated static let resumeGrace = 10
+
+    /// What the agent's tab runs. A resume that exits 1 within a few seconds found nothing to carry
+    /// on (Claude Code says so and exits 1 at once), so the agent starts fresh instead. One that
+    /// fails later was a conversation that ended, and one that fails another way (stopped with
+    /// Ctrl-C, not installed) has said why; neither is started again. The time is read with
+    /// `date`, since dash has no `$SECONDS`.
+    nonisolated static func startCommand(agent: Agent, resume: Bool, shell: String, grace: Int = resumeGrace) -> String {
+        guard resume, let resumeCommand = agent.resumeCommand else { return agent.command }
+        guard posixShells.contains((shell as NSString).lastPathComponent) else { return resumeCommand }
+        return "__pc_started=$(date +%s); \(resumeCommand) || { [ $? -eq 1 ] && [ $(($(date +%s) - __pc_started)) -lt \(grace) ] && \(agent.command); }"
+    }
+
+    init(directory: URL, agent: Agent?, resume: Bool = false, startedWithFolder: Bool = false) {
         self.agent = agent
+        self.startedWithFolder = startedWithFolder
+        self.directory = directory
         let shell = TerminalSession.userShell
         title = agent?.name ?? (shell as NSString).lastPathComponent
         super.init()
         view.processDelegate = self
-        view.startProcess(executable: shell, args: TerminalSession.arguments(shell: shell, agent: agent),
+        view.setProcessOutputHandler { [lastOutput] in lastOutput.mark() }
+        view.startProcess(executable: shell, args: TerminalSession.arguments(shell: shell, agent: agent, resume: resume),
                           environment: TerminalSession.environment(shell: shell), currentDirectory: directory.path)
         Settings.shared.$fontName.merge(with: Settings.shared.$fontSize.map { _ in "" }).dropFirst(2)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.view.font = Settings.shared.codeFont }
             .store(in: &observers)
+        // Only the agents it knows how to install: a custom command may not start with a program's name.
+        if let agent, agent.installCommand != nil { checkInstalled(agent, shell: shell, directory: directory) }
+    }
+
+    /// Looks for the agent the way its terminal will, in a login shell, alongside the terminal
+    /// starting rather than before it. A check that can't finish says nothing.
+    private func checkInstalled(_ agent: Agent, shell: String, directory: URL) {
+        let environment = TerminalSession.variables(shell: shell)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = TerminalSession.isInstalled(agent.program, shell: shell, directory: directory, environment: environment)
+            // Only at the shell's prompt: anything running in the tab means the agent did start.
+            if found == false { DispatchQueue.main.async { if let self, !self.isBusy { self.agentMissing = true } } }
+        }
+    }
+
+    /// Whether a login shell finds `program`; nil if the shell couldn't say within 15 seconds.
+    nonisolated static func isInstalled(_ program: String, shell: String, directory: URL, environment: [String: String]) -> Bool? {
+        let result = Shell.run(shell, ["-l", "-i", "-c", "command -v -- \(LeanTerminalView.shellEscaped(program)) >/dev/null 2>&1"],
+                               in: directory, timeout: 15, environment: environment)
+        switch result.status {
+        case 0: return true
+        case 1, 127: return false
+        default: return nil
+        }
+    }
+
+    /// Types the agent's installer into the terminal, at the shell's prompt where the missing agent
+    /// left it, so the install runs in sight and the agent starts once it's done.
+    func installAgent() {
+        guard let command = agent?.installCommand else { return }
+        // Typed only at the prompt, never into a program that's running. Until then the offer stays.
+        guard !isBusy else {
+            NSSound.beep()
+            focus()
+            return
+        }
+        agentMissing = false
+        view.send(txt: command + "\r")
+        focus()
     }
 
     /// True while something other than the shell's prompt is running (an agent, a server, a build).
-    var isBusy: Bool {
-        guard let process = view.process, process.running else { return false }
+    var isBusy: Bool { foregroundGroup != nil }
+
+    /// The process group running in the foreground, or nil at the shell's prompt.
+    private var foregroundGroup: pid_t? {
+        guard let process = view.process, process.running else { return nil }
         let foreground = tcgetpgrp(process.childfd)
-        return foreground > 0 && foreground != process.shellPid
+        return foreground > 0 && foreground != process.shellPid ? foreground : nil
+    }
+
+    /// What closing the tab would cut short, in a few words, to name it first: "npm run dev", or
+    /// "Claude Code (“✳ Fix the login”), running a command" with the title it gave its tab. Nil at
+    /// the prompt, and nil for Claude Code waiting for its next prompt in the folder's agent tab when
+    /// the folder will carry its conversation on as it opens again, so closing it then loses nothing.
+    var running: String? {
+        guard let group = foregroundGroup else { return nil }
+        let arguments = TerminalSession.commandLine(of: group)
+        let name = TerminalSession.summary(arguments: arguments, agent: agent, title: title,
+                                           shell: (TerminalSession.userShell as NSString).lastPathComponent)
+        guard TerminalSession.isClaudeCode(arguments) else { return name }
+        switch ClaudeActivity(children: TerminalSession.children(of: group), group: group) {
+        case .waiting:
+            let settings = Settings.shared
+            // Claude Code leads its process group, so the group is its process.
+            let othersWorked = laterAgentOpened || otherTabRunsClaudeCode()
+                || TerminalSession.anotherIsLatest(conversations: agent?.conversations(in: directory) ?? [],
+                                                   ownSession: Agent.claudeSession(pid: group), lastOutput: lastOutput.date)
+            return TerminalSession.carriesOn(tabAgent: agent, startedWithFolder: startedWithFolder, othersWorked: othersWorked,
+                                             folderAgent: settings.agent,
+                                             remembers: Workspace.remembersState,
+                                             startsAgent: settings.startAgentOnOpen, continues: settings.continueConversation) ? nil : name
+        case .unknown: return name
+        case .commands(1): return "\(name), running a command"
+        case .commands(let count): return "\(name), running \(count) commands"
+        case .replying: return "\(name), working on a reply"
+        }
+    }
+
+    /// Whether a waiting agent in a tab started with `tabAgent` picks its conversation up again when
+    /// the folder next opens: only the tab the folder opened with continues, and only with every
+    /// setting that brings it back on. A later agent tab, or Claude Code typed into a shell tab, doesn't.
+    /// Nor does the first tab once another Claude Code has worked in the folder (`othersWorked`):
+    /// the folder carries on its latest conversation, which may be the other one's.
+    nonisolated static func carriesOn(tabAgent: Agent?, startedWithFolder: Bool, othersWorked: Bool = false, folderAgent: Agent?,
+                                      remembers: Bool, startsAgent: Bool, continues: Bool) -> Bool {
+        guard startedWithFolder, !othersWorked, let tabAgent, tabAgent.resumeCommand != nil, tabAgent.id == folderAgent?.id else { return false }
+        return remembers && startsAgent && continues
+    }
+
+    /// Whether Claude Code is what's running in the tab.
+    var runsClaudeCode: Bool {
+        foregroundGroup.map { TerminalSession.isClaudeCode(TerminalSession.commandLine(of: $0)) } ?? false
+    }
+
+    /// How long after a tab's last output its own Claude Code may still be writing its
+    /// conversation (it names it, for one, after the reply).
+    nonisolated static let ownWriteSlack: TimeInterval = 10
+
+    /// Whether the folder's latest conversation was written after this tab went quiet, so
+    /// another Claude Code wrote it: one typed into a shell tab, perhaps since closed, or one
+    /// in another app. A tab's own is written as it replies, while it prints.
+    nonisolated static func writtenElsewhere(latest: Date?, lastOutput: Date, slack: TimeInterval = ownWriteSlack) -> Bool {
+        guard let latest else { return false }
+        return latest > lastOutput.addingTimeInterval(slack)
+    }
+
+    /// Whether the folder's latest conversation is another Claude Code's, not this tab's, so the
+    /// folder would carry that one on. With this tab's own session (`ownSession`), the latest is
+    /// another's when it has a different name, but only once this tab has written a conversation
+    /// of its own: before that, closing it loses nothing. Without its session, it's told by
+    /// whether the latest was written after the tab went quiet.
+    nonisolated static func anotherIsLatest(conversations: [Agent.Conversation], ownSession: String?, lastOutput: Date,
+                                            slack: TimeInterval = ownWriteSlack) -> Bool {
+        guard let latest = conversations.max(by: { $0.written < $1.written }) else { return false }
+        guard let ownSession else { return writtenElsewhere(latest: latest.written, lastOutput: lastOutput, slack: slack) }
+        return latest.session != ownSession && conversations.contains { $0.session == ownSession }
+    }
+
+    /// One process a program started: its process group and its program's name.
+    struct Child: Equatable {
+        let group: pid_t
+        let program: String
+    }
+
+    /// Whether a command line is Claude Code's.
+    nonisolated static func isClaudeCode(_ arguments: [String]?) -> Bool {
+        arguments.map(describe)?.split(separator: " ").first == "claude"
+    }
+
+    /// What Claude Code is doing, read from the processes it started. It runs each shell command
+    /// in a process group of its own, background ones included, while its MCP servers stay in its
+    /// group; and it keeps the Mac awake with `caffeinate` while it works on a reply, which also
+    /// covers thinking and subagents, as they start no process.
+    enum ClaudeActivity: Equatable {
+        /// At its prompt with nothing running: closing loses nothing.
+        case waiting
+        /// Its processes couldn't be read, so it might be doing anything.
+        case unknown
+        /// Shell commands still running, in the foreground or the background.
+        case commands(Int)
+        /// Working on a reply, with no command running.
+        case replying
+
+        init(children: [Child]?, group: pid_t) {
+            guard let children else { self = .unknown; return }
+            let commands = children.filter { $0.group != group }.count
+            if commands > 0 { self = .commands(commands) }
+            else if children.contains(where: { $0.program == "caffeinate" }) { self = .replying }
+            else { self = .waiting }
+        }
+    }
+
+    /// The processes `parent` started, or nil if the system won't say.
+    nonisolated static func children(of parent: pid_t) -> [Child]? {
+        // Asked with no room, it gives a count big enough for every process.
+        let room = proc_listchildpids(parent, nil, 0)
+        guard room > 0 else { return nil }
+        var pids = [pid_t](repeating: 0, count: Int(room))
+        let count = pids.withUnsafeMutableBytes { proc_listchildpids(parent, $0.baseAddress, Int32($0.count)) }
+        guard count >= 0 else { return nil }
+        return pids.prefix(Int(count)).compactMap { pid in
+            let group = getpgid(pid)
+            // One that has just ended is no longer anything to warn about.
+            guard group > 0 else { return nil }
+            let program = commandLine(of: pid).map(describe)?.split(separator: " ").first.map(String.init) ?? ""
+            return Child(group: group, program: program)
+        }
+    }
+
+    /// The agent goes by its name, anything else by its command, and the tab's title is added when
+    /// it says something the name doesn't.
+    nonisolated static func summary(arguments: [String]?, agent: Agent?, title: String, shell: String) -> String {
+        let command = arguments.map(describe) ?? "a program"
+        let program = command.split(separator: " ").first.map(String.init)
+        let isAgent = agent.map { $0.command.split(separator: " ").first.map { ($0 as NSString).lastPathComponent } == program } ?? false
+        let name = isAgent ? agent?.name ?? command : command
+        // Titles often lead with a mark of their own ("✳ Claude Code"), which says nothing.
+        let plain = String(title.drop { !$0.isLetter && !$0.isNumber })
+        guard !plain.isEmpty, plain != agent?.name, plain != shell, !name.hasPrefix(plain), !command.hasPrefix(plain) else { return name }
+        return "\(name) (“\(title)”)"
+    }
+
+    /// The arguments a process was started with, as the system keeps them.
+    nonisolated static func commandLine(of pid: pid_t) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        // The argument count, the path it was run from, padding, then the arguments, each ending in a zero.
+        let count = buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        var index = MemoryLayout<Int32>.size
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        var arguments: [String] = []
+        while arguments.count < count, index < size {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            arguments.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return arguments.isEmpty ? nil : arguments
+    }
+
+    /// A command line made short enough to read at a glance: programs go by their names, not their
+    /// paths, and a script run by its interpreter goes by the script ("node …/bin/npm run dev" is
+    /// "npm run dev").
+    nonisolated static func describe(_ arguments: [String]) -> String {
+        var words = arguments.map { $0.hasPrefix("/") ? ($0 as NSString).lastPathComponent : $0 }
+        let interpreters: Set = ["node", "python", "python3", "ruby", "bun", "deno", "perl"]
+        if words.count > 1, interpreters.contains(words[0]), arguments[1].contains("/") { words.removeFirst() }
+        let text = words.joined(separator: " ")
+        return text.count > 60 ? String(text.prefix(59)) + "…" : text
     }
 
     func terminate() {
@@ -187,4 +446,13 @@ struct TerminalHost: NSViewRepresentable {
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         }
     }
+}
+
+/// When a terminal last printed, kept safe to write from the thread that reads its output.
+final class LastOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date()
+
+    func mark() { lock.withLock { last = Date() } }
+    var date: Date { lock.withLock { last } }
 }

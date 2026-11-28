@@ -167,27 +167,11 @@ struct IconButtonStyle: ButtonStyle {
 struct Divider1: View {
     enum Axis { case horizontal, vertical }
     /// `.vertical` is a vertical line (between side-by-side panes).
+    /// A line that resizes the panes beside it gets a `SplitHandle` laid over it.
     let axis: Axis
-    var onDrag: ((CGFloat) -> Void)?
-    var onEnd: (() -> Void)?
 
     var body: some View {
         let line = Rectangle().fill(Theme.border)
-        Group {
-            if axis == .vertical { line.frame(width: 1) } else { line.frame(height: 1) }
-        }
-        .overlay {
-            if let onDrag {
-                Color.clear
-                    .frame(width: axis == .vertical ? 9 : nil, height: axis == .horizontal ? 9 : nil)
-                    .contentShape(Rectangle())
-                    .onHover { inside in
-                        if inside { (axis == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
-                    }
-                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { onDrag(axis == .vertical ? $0.location.x : $0.location.y) }
-                        .onEnded { _ in onEnd?() })
-            }
-        }
+        if axis == .vertical { line.frame(width: 1) } else { line.frame(height: 1) }
     }
 }
