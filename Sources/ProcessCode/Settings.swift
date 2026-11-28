@@ -39,34 +39,53 @@ struct Agent: Identifiable, Equatable {
     var program: String { command.split(separator: " ").first.map(String.init) ?? command }
     static let customID = "custom"
 
-    /// Whether there's an earlier conversation with this agent in `folder` to carry on.
-    func hasConversation(in folder: URL, home: String = TerminalSession.home) -> Bool {
-        guard resumeCommand != nil, id == "claude" else { return false }
+    /// One of the conversations Claude Code keeps for a folder: its session, which names its
+    /// file, and when it was last written to.
+    struct Conversation: Equatable {
+        let session: String
+        let written: Date
+    }
+
+    /// The conversations with this agent in `folder`, in no order. Only Claude Code's are found.
+    func conversations(in folder: URL, home: String = TerminalSession.home) -> [Conversation] {
+        guard resumeCommand != nil, id == "claude" else { return [] }
         // Claude Code keeps each folder's conversations in ~/.claude/projects, in a folder named
         // after the path with everything but letters and digits made a dash. Its terminal is
         // given no CLAUDE_CONFIG_DIR, so that's where they are. The shell may see the folder
         // through a symlink, so both spellings are tried. A guess that's wrong costs little: the
         // agent starts fresh when there turns out to be nothing to continue.
         let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
-        let paths = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path])
-        return paths.contains { path in
-            let store = Agent.claudeFolder(for: path, in: projects)
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
-            return files.contains { $0.hasSuffix(".jsonl") }
+        let stores = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path].map { Agent.claudeFolder(for: $0, in: projects) })
+        return stores.flatMap { store in
+            ((try? FileManager.default.contentsOfDirectory(at: store, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+                .filter { $0.pathExtension == "jsonl" }
+                .map { file in
+                    Conversation(session: file.deletingPathExtension().lastPathComponent,
+                                 written: (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast)
+                }
         }
+    }
+
+    /// Whether there's an earlier conversation with this agent in `folder` to carry on.
+    func hasConversation(in folder: URL, home: String = TerminalSession.home) -> Bool {
+        !conversations(in: folder, home: home).isEmpty
     }
 
     /// When the conversation with this agent in `folder` that was written to last was written,
     /// or nil if there's none: the one the folder carries on.
     func latestConversation(in folder: URL, home: String = TerminalSession.home) -> Date? {
-        guard resumeCommand != nil, id == "claude" else { return nil }
-        let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
-        let stores = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path].map { Agent.claudeFolder(for: $0, in: projects) })
-        return stores.flatMap { store in
-            ((try? FileManager.default.contentsOfDirectory(at: store, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-                .filter { $0.pathExtension == "jsonl" }
-                .compactMap { (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate }
-        }.max()
+        conversations(in: folder, home: home).map(\.written).max()
+    }
+
+    /// The session of the Claude Code running as process `pid`, which names the conversation it
+    /// writes, or nil if it can't be told. Claude Code keeps a note on each running copy in
+    /// ~/.claude/sessions, named by its process.
+    static func claudeSession(pid: pid_t, home: String = TerminalSession.home) -> String? {
+        let note = URL(fileURLWithPath: home).appendingPathComponent(".claude/sessions/\(pid).json")
+        guard let data = try? Data(contentsOf: note),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["pid"] as? Int == Int(pid), let session = json["sessionId"] as? String, !session.isEmpty else { return nil }
+        return session
     }
 
     /// Claude Code shortens a long folder name to its first 200 characters and adds its hash of

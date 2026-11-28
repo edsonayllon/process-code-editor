@@ -251,8 +251,10 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         switch ClaudeActivity(children: TerminalSession.children(of: group), group: group) {
         case .waiting:
             let settings = Settings.shared
+            // Claude Code leads its process group, so the group is its process.
             let othersWorked = laterAgentOpened || otherTabRunsClaudeCode()
-                || TerminalSession.writtenElsewhere(latest: agent?.latestConversation(in: directory), lastOutput: lastOutput.date)
+                || TerminalSession.anotherIsLatest(conversations: agent?.conversations(in: directory) ?? [],
+                                                   ownSession: Agent.claudeSession(pid: group), lastOutput: lastOutput.date)
             return TerminalSession.carriesOn(tabAgent: agent, startedWithFolder: startedWithFolder, othersWorked: othersWorked,
                                              folderAgent: settings.agent,
                                              remembers: Workspace.remembersState,
@@ -290,6 +292,18 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     nonisolated static func writtenElsewhere(latest: Date?, lastOutput: Date, slack: TimeInterval = ownWriteSlack) -> Bool {
         guard let latest else { return false }
         return latest > lastOutput.addingTimeInterval(slack)
+    }
+
+    /// Whether the folder's latest conversation is another Claude Code's, not this tab's, so the
+    /// folder would carry that one on. With this tab's own session (`ownSession`), the latest is
+    /// another's when it has a different name, but only once this tab has written a conversation
+    /// of its own: before that, closing it loses nothing. Without its session, it's told by
+    /// whether the latest was written after the tab went quiet.
+    nonisolated static func anotherIsLatest(conversations: [Agent.Conversation], ownSession: String?, lastOutput: Date,
+                                            slack: TimeInterval = ownWriteSlack) -> Bool {
+        guard let latest = conversations.max(by: { $0.written < $1.written }) else { return false }
+        guard let ownSession else { return writtenElsewhere(latest: latest.written, lastOutput: lastOutput, slack: slack) }
+        return latest.session != ownSession && conversations.contains { $0.session == ownSession }
     }
 
     /// One process a program started: its process group and its program's name.

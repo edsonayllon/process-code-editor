@@ -289,6 +289,38 @@ final class TerminalTests: XCTestCase {
                        "written as the tab finished its reply, or named a moment after: its own")
         XCTAssertTrue(TerminalSession.writtenElsewhere(latest: quiet.addingTimeInterval(60), lastOutput: quiet),
                       "written a minute after the tab went quiet: another Claude Code's")
+
+        // With the tab's own session, its output doesn't matter: a redraw after the other wrote
+        // can't hide that the latest is another's.
+        let mine = Agent.Conversation(session: "mine", written: quiet)
+        let theirs = Agent.Conversation(session: "theirs", written: quiet.addingTimeInterval(60))
+        let redrawn = quiet.addingTimeInterval(120)
+        XCTAssertFalse(TerminalSession.anotherIsLatest(conversations: [], ownSession: "mine", lastOutput: quiet))
+        XCTAssertTrue(TerminalSession.anotherIsLatest(conversations: [mine, theirs], ownSession: "mine", lastOutput: redrawn),
+                      "the shell tab's Claude Code wrote last, though this tab printed since")
+        XCTAssertFalse(TerminalSession.anotherIsLatest(conversations: [theirs, Agent.Conversation(session: "mine", written: redrawn)],
+                                                       ownSession: "mine", lastOutput: quiet),
+                       "its own is the latest, though it's been quiet")
+        XCTAssertFalse(TerminalSession.anotherIsLatest(conversations: [theirs], ownSession: "mine", lastOutput: quiet),
+                       "it hasn't written a conversation yet, so closing it loses nothing")
+        XCTAssertFalse(TerminalSession.anotherIsLatest(conversations: [mine, theirs], ownSession: nil, lastOutput: redrawn),
+                       "without its session, it falls back to when it last printed")
+        XCTAssertTrue(TerminalSession.anotherIsLatest(conversations: [mine, theirs], ownSession: nil, lastOutput: quiet))
+    }
+
+    /// A running Claude Code's session is read from the note it keeps on itself, by its process.
+    func testClaudeCodesSessionIsReadFromItsNote() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sessions = home.appendingPathComponent(".claude/sessions")
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data(#"{"pid":4242,"sessionId":"48a76296-c4a6","cwd":"/a","status":"idle"}"#.utf8).write(to: sessions.appendingPathComponent("4242.json"))
+        try Data(#"{"pid":7,"sessionId":"left-behind"}"#.utf8).write(to: sessions.appendingPathComponent("4343.json"))
+        try Data("not json".utf8).write(to: sessions.appendingPathComponent("4444.json"))
+        XCTAssertEqual(Agent.claudeSession(pid: 4242, home: home.path), "48a76296-c4a6")
+        XCTAssertNil(Agent.claudeSession(pid: 4343, home: home.path), "a note about another process")
+        XCTAssertNil(Agent.claudeSession(pid: 4444, home: home.path))
+        XCTAssertNil(Agent.claudeSession(pid: 4545, home: home.path), "no note")
     }
 
     /// The folder's first agent tab stops counting on carrying on once another tab with the same
