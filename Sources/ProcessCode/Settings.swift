@@ -50,36 +50,39 @@ struct Agent: Identifiable, Equatable {
         let projects = URL(fileURLWithPath: home).appendingPathComponent(".claude/projects")
         let paths = Set([folder.standardizedFileURL.path, folder.resolvingSymlinksInPath().path])
         return paths.contains { path in
-            Agent.claudeFolders(for: path, in: projects).contains { store in
-                let files = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
-                return files.contains { $0.hasSuffix(".jsonl") }
-            }
+            let store = Agent.claudeFolder(for: path, in: projects)
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
+            return files.contains { $0.hasSuffix(".jsonl") }
         }
     }
 
-    /// Claude Code shortens a long folder name to its first 200 characters and adds a hash of its
-    /// own, so a long one is matched by those 200.
+    /// Claude Code shortens a long folder name to its first 200 characters and adds its hash of
+    /// the whole path.
     static let claudeNameLimit = 200
 
-    /// The folders in `projects` that may hold the conversations for `path`.
-    static func claudeFolders(for path: String, in projects: URL) -> [URL] {
-        let name = claudeFolderName(for: path)
-        var folders = [projects.appendingPathComponent(name)]
-        if name.count > claudeNameLimit {
-            let prefix = String(name.prefix(claudeNameLimit))
-            let names = (try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? []
-            folders += names.filter { $0 != name && $0.hasPrefix(prefix) }.map { projects.appendingPathComponent($0) }
-        }
-        return folders
+    /// The folder in `projects` that holds the conversations for `path`.
+    static func claudeFolder(for path: String, in projects: URL) -> URL {
+        projects.appendingPathComponent(claudeFolderName(for: path))
+    }
+
+    /// Claude Code's hash of a path, as it writes it: Java's string hash over the UTF-16 units,
+    /// kept to 32 bits, without its sign.
+    static func claudeHash(_ path: String) -> Int64 {
+        var hash: Int32 = 0
+        for unit in path.utf16 { hash = (hash &<< 5) &- hash &+ Int32(unit) }
+        return abs(Int64(hash))
     }
 
     /// The path with every character but an ASCII letter or digit made a dash, counted as
     /// JavaScript counts them: an emoji, two UTF-16 units, becomes two dashes.
+    /// A name longer than `claudeNameLimit` is cut there and given the hash in base 36.
     static func claudeFolderName(for path: String) -> String {
-        String(path.utf16.map { unit -> Character in
+        let name = String(path.utf16.map { unit -> Character in
             guard unit < 128, let scalar = Unicode.Scalar(unit), CharacterSet.alphanumerics.contains(scalar) else { return "-" }
             return Character(scalar)
         })
+        guard name.count > claudeNameLimit else { return name }
+        return name.prefix(claudeNameLimit) + "-" + String(claudeHash(path), radix: 36)
     }
 }
 

@@ -1486,13 +1486,24 @@ final class ServiceTests: XCTestCase {
     func testClaudesLongAndNonASCIIFolderNamesAreFound() throws {
         let projects = folder.appendingPathComponent("home/.claude/projects")
         XCTAssertEqual(Agent.claudeFolderName(for: "/a/caf\u{e9}/\u{1F680}"), "-a-caf----", "é and / are a dash each, and the emoji is two UTF-16 units, so two")
-        let long = "/" + String(repeating: "deep/", count: 50)
-        let name = Agent.claudeFolderName(for: long)
-        XCTAssertGreaterThan(name.count, Agent.claudeNameLimit)
-        let shortened = projects.appendingPathComponent(String(name.prefix(Agent.claudeNameLimit)) + "-k3x9")
-        try FileManager.default.createDirectory(at: shortened, withIntermediateDirectories: true)
-        try Data().write(to: shortened.appendingPathComponent("1.jsonl"))
-        XCTAssertTrue(Agent.presets[0].hasConversation(in: URL(fileURLWithPath: long), home: folder.appendingPathComponent("home").path))
+        // A long name is cut to 200 and given Claude Code's hash of the whole path. These are the
+        // names Claude Code's own code gives (run in node).
+        let long = "/Users/x/" + String(repeating: "a-very-long-folder-name/", count: 10) + "app"
+        XCTAssertEqual(Agent.claudeFolderName(for: long), "-Users-x-" + String(repeating: "a-very-long-folder-name-", count: 8).dropLast() + "-wtgfru")
+        let emoji = "/Users/x/\u{1F389} " + String(repeating: "deep/", count: 45) + "\u{e9}"
+        XCTAssertEqual(Agent.claudeFolderName(for: emoji), "-Users-x----" + String(repeating: "deep-", count: 37) + "dee-dxcj84")
+        XCTAssertEqual(Agent.claudeHash("a"), 97)
+        XCTAssertEqual(Agent.claudeHash("/Users/x"), 1825244930)
+
+        let home = folder.appendingPathComponent("home").path
+        let sibling = String(long.dropLast(3)) + "web"
+        XCTAssertEqual(Agent.claudeFolderName(for: sibling).prefix(Agent.claudeNameLimit), Agent.claudeFolderName(for: long).prefix(Agent.claudeNameLimit))
+        let store = projects.appendingPathComponent(Agent.claudeFolderName(for: sibling))
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try Data().write(to: store.appendingPathComponent("1.jsonl"))
+        XCTAssertTrue(Agent.presets[0].hasConversation(in: URL(fileURLWithPath: sibling), home: home))
+        XCTAssertFalse(Agent.presets[0].hasConversation(in: URL(fileURLWithPath: long), home: home),
+                       "a folder whose name starts the same isn't this one")
     }
 
     /// The resume, run for real in each shell, against a stand-in for claude.
