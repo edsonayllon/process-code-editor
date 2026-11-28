@@ -447,17 +447,21 @@ final class Workspace: ObservableObject {
         case save, discard, cancel
     }
 
+    /// The answer to the unsaved-changes question under tests, where nobody can answer it: Don't
+    /// Save unless a test says otherwise, which leaves the test's files as they are.
+    nonisolated(unsafe) static var unsavedAnswerUnderTests = UnsavedAnswer.discard
+
     /// Asks what to do with a tab's unsaved changes. Nil if it has none.
     private func askAboutChanges(_ document: Document) -> UnsavedAnswer? {
         guard document.isDirty else { return nil }
+        if runningTests { return Workspace.unsavedAnswerUnderTests }
         let alert = NSAlert()
         alert.messageText = "Save the changes to “\(document.name)”?"
         alert.informativeText = "Your changes will be lost if you don't save them."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Don't Save")
-        // Under tests, Don't Save: it leaves the test's files as they are.
-        switch alert.answer(underTests: .alertThirdButtonReturn) {
+        switch alert.runModal() {
         case .alertFirstButtonReturn: return .save
         case .alertSecondButtonReturn: return .cancel
         default: return .discard
@@ -719,13 +723,15 @@ final class Workspace: ObservableObject {
         let destination = url.deletingLastPathComponent().appendingPathComponent(name)
         let open = documents(under: url)
         var discarded: [Document] = [], saved: [Document] = []
+        // A LaTeX file saved for a rename that then stops builds where it still is.
+        func stop() { saved.forEach { build($0) } }
         for document in open {
             switch askAboutChanges(document) {
             // A LaTeX file builds once it's at its new name, not at the old one the move takes away.
             case .save:
-                guard save(document, build: false) else { return }
+                guard save(document, build: false) else { return stop() }
                 saved.append(document)
-            case .cancel: return
+            case .cancel: return stop()
             case .discard: discarded.append(document)
             case nil: break
             }
@@ -734,7 +740,7 @@ final class Workspace: ObservableObject {
             try FileManager.default.moveItem(at: url, to: destination)
         } catch {
             Workspace.report(error, title: "Couldn't rename “\(url.lastPathComponent)”")
-            return
+            return stop()
         }
         for document in open {
             let moved = URL(fileURLWithPath: destination.path + document.url.path.dropFirst(url.path.count))

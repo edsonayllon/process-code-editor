@@ -1463,6 +1463,41 @@ final class ServiceTests: XCTestCase {
         XCTAssertEqual(document.pdfURL?.lastPathComponent, "essay.pdf")
     }
 
+    /// A LaTeX file saved for a rename that then can't be done is built where it still is, so its
+    /// PDF matches the text on disk.
+    @MainActor
+    func testALatexFileSavedForARenameThatFailsIsStillBuilt() throws {
+        let root = folder.appendingPathComponent("rename-build-fails")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".vscode"), withIntermediateDirectories: true)
+        let settings = """
+        {
+          "latex-workshop.latex.recipes": [{ "name": "fake", "tools": ["fake"] }],
+          "latex-workshop.latex.tools": [{ "name": "fake", "command": "bash", "args": ["-c", "printf x > \\"%DOC%.pdf\\""] }]
+        }
+        """
+        try settings.write(to: root.appendingPathComponent(".vscode/settings.json"), atomically: true, encoding: .utf8)
+        let paper = root.appendingPathComponent("paper.tex"), taken = root.appendingPathComponent("essay.tex")
+        for file in [paper, taken] { try "\\documentclass{article}".write(to: file, atomically: true, encoding: .utf8) }
+        Workspace.toldInstead = { _, _ in }
+        Workspace.unsavedAnswerUnderTests = .save
+        defer { Workspace.toldInstead = nil; Workspace.unsavedAnswerUnderTests = .discard }
+        let workspace = Workspace(root: root, launchAgent: false)
+        defer { workspace.close() }
+        workspace.open(paper)
+        let document = try XCTUnwrap(workspace.documents.first)
+        try XCTUnwrap(document.editor).textView.insertText("%", replacementRange: NSRange(location: 0, length: 0))
+
+        workspace.rename(paper, to: "essay.tex")   // the name is taken, so the move fails
+        XCTAssertFalse(document.isDirty, "saved before the move was tried")
+        XCTAssertEqual(document.url, paper)
+        let deadline = Date().addingTimeInterval(15)
+        while document.build == .running || document.build == .idle, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(document.build, .succeeded, "built at the name it kept")
+        XCTAssertEqual(document.pdfURL?.lastPathComponent, "paper.pdf")
+    }
+
     /// A rename that can't be done leaves the tabs as they were: the same documents, in the same
     /// order, with the side pane and each one's undo history.
     @MainActor
