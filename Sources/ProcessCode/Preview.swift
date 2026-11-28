@@ -151,6 +151,17 @@ struct MarkdownPreview: NSViewRepresentable {
         var pending: String?
         var revision = -1
         var openFile: (URL) -> Void = { _ in }
+        /// The folder the page's relative images and links are read from: the file's.
+        var base: URL?
+
+        /// Loads the page, reading relative images and links from `folder`. Its content is set again
+        /// once it has loaded.
+        func load(in webView: WKWebView, folder: URL) {
+            base = folder
+            loaded = false
+            revision = -1
+            webView.loadHTMLString(Markdown.page, baseURL: LocalFileSchemeHandler.url(forDirectory: folder))
+        }
 
         func show(_ html: String, in webView: WKWebView) {
             guard loaded else { pending = html; return }
@@ -185,12 +196,15 @@ struct MarkdownPreview: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
-        webView.loadHTMLString(Markdown.page, baseURL: LocalFileSchemeHandler.url(forDirectory: document.url.deletingLastPathComponent()))
+        context.coordinator.load(in: webView, folder: document.url.deletingLastPathComponent())
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.openFile = openFile
+        // A rename moved the file to another folder, and the tab followed it: read from there.
+        let folder = document.url.deletingLastPathComponent()
+        if context.coordinator.base != folder { context.coordinator.load(in: webView, folder: folder) }
         guard context.coordinator.revision != document.revision else { return }
         context.coordinator.revision = document.revision
         context.coordinator.show(Markdown.html(document.text), in: webView)
