@@ -349,8 +349,8 @@ final class IntegrationTests: AppTestCase {
 
     /// A file sent to the Trash from one window's sidebar, while another window, on a folder inside
     /// this one, has it open and unsaved: the question names it, and after the move that window
-    /// closes its tab too. ⌘Z puts it back in both windows' sidebars, and ⇧⌘Z asks again once the
-    /// other window has unsaved text in it.
+    /// closes its tab too. ⌘Z puts it back in both windows' sidebars, and once the other window has
+    /// unsaved text in it, ⇧⌘Z leaves it and says why.
     @MainActor
     func testTrashingAFileAsksAboutAndClosesItsTabInEveryWindow() throws {
         let outer = folder.appendingPathComponent("outer")
@@ -382,12 +382,14 @@ final class IntegrationTests: AppTestCase {
         b.open(file)
         let reopened = try XCTUnwrap(b.documents.first { $0.name == "x.txt" })
         try XCTUnwrap(reopened.editor).textView.insertText("?", replacementRange: NSRange(location: 1, length: 0))
-        AppTestCase.answer(["Cancel"])
+        AppTestCase.answer([])
         a.fileUndo.redo()
-        XCTAssertEqual(AppTestCase.asked.count, 1, "⇧⌘Z asks first, now that the other window has unsaved text in it")
-        XCTAssertTrue(AppTestCase.asked.first?.contains("“x.txt” has unsaved changes") == true, AppTestCase.asked.first ?? "")
-        XCTAssertTrue(Workspace.exists(file), "Cancel leaves it")
+        XCTAssertEqual(AppTestCase.asked, [], "nothing is shown while the redo is under way")
+        XCTAssertTrue(Workspace.exists(file), "⇧⌘Z leaves it, as the other window has unsaved text in it")
         XCTAssertTrue(reopened.isDirty, "with the typing still there")
+        wait("the reason", until: { !AppTestCase.asked.isEmpty })
+        XCTAssertEqual(AppTestCase.asked.count, 1)
+        XCTAssertTrue(AppTestCase.asked.first?.contains("“x.txt” has unsaved changes in an open window") == true, AppTestCase.asked.first ?? "")
         reopened.reload()
     }
 }

@@ -818,8 +818,7 @@ final class Workspace: ObservableObject {
     /// The names of the files at or inside `url` with unsaved changes in any open window. A file
     /// open in two windows is named once.
     private func unsavedNames(under url: URL) -> [String] {
-        everyWorkspace.reduce(into: Set<String>()) { $0.formUnion($1.unsavedPaths(under: url)) }
-            .sorted().map { ($0 as NSString).lastPathComponent }
+        Workspace.unsavedPaths(under: url, in: everyWorkspace).sorted().map { ($0 as NSString).lastPathComponent }
     }
 
     /// The open files at or inside `url` that have unsaved changes.
@@ -830,7 +829,12 @@ final class Workspace: ObservableObject {
     /// How many files at or inside `url` have unsaved changes in any of `workspaces`. A file open
     /// in two windows is one file.
     static func unsavedCount(under url: URL, in workspaces: [Workspace]) -> Int {
-        workspaces.reduce(into: Set<String>()) { $0.formUnion($1.unsavedPaths(under: url)) }.count
+        unsavedPaths(under: url, in: workspaces).count
+    }
+
+    /// The files at or inside `url` with unsaved changes in any of `workspaces`, each once.
+    static func unsavedPaths(under url: URL, in workspaces: [Workspace]) -> Set<String> {
+        workspaces.reduce(into: Set<String>()) { $0.formUnion($1.unsavedPaths(under: url)) }
     }
 
     private func moveToTrash(_ url: URL) {
@@ -900,18 +904,20 @@ final class Workspace: ObservableObject {
         for workspace in everyWorkspace { workspace.reloadIfConcerned(by: original) }
     }
 
-    /// Redo of a put-back: the Trash again, asking first if a window has unsaved text in it now,
-    /// since the tabs close and it would be lost. Cancel leaves it, and drops the redo.
+    /// Redo of a put-back: the Trash again, at once, so the steps after it can still be redone.
+    /// It asks nothing, since a question can't wait inside a redo. So when the move would lose
+    /// unsaved text in a window, or the item isn't there any more, it's left as it is and says why
+    /// once the redo is over.
     private func trashAgain(_ url: URL) {
-        if let warning = Workspace.finish([], unsaved: unsavedNames(under: url)) {
-            let alert = NSAlert()
-            alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
-            alert.informativeText = warning
-            alert.addButton(withTitle: "Move to Trash").hasDestructiveAction = true
-            alert.addButton(withTitle: "Cancel")
-            guard alert.answer() == .alertFirstButtonReturn else { return }
+        let title = "Couldn't move “\(url.lastPathComponent)” to the Trash again"
+        var reason: String?
+        if !Workspace.exists(url) {
+            reason = "It isn't there any more."
+        } else if let unsaved = unsavedNames(under: url).first {
+            reason = "“\(unsaved)” has unsaved changes in an open window. Save or close it, then move it to the Trash."
         }
-        moveToTrash(url)
+        guard let reason else { return moveToTrash(url) }
+        DispatchQueue.main.async { Workspace.tell(title, reason) }
     }
 
     /// What would be lost if `path` went to the Trash and the Trash were emptied, or nil if
