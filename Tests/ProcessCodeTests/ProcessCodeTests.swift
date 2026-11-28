@@ -6,10 +6,25 @@ import XCTest
 /// Save or Cancel where the question has one, and Cancel for a panel. A test that needs another
 /// answer sets `NSAlert.answering` itself; the next test starts over.
 class AppTestCase: XCTestCase {
+    /// The questions asked so far in this test, each its title and then its detail.
+    nonisolated(unsafe) static var asked: [String] = []
+
     override func setUp() {
         super.setUp()
-        NSAlert.answering = { AppTestCase.press(["Don't Save", "Cancel"], in: $0) }
+        AppTestCase.answer([])
         NSSavePanel.choosing = { _ in .cancel }
+    }
+
+    /// Answers the next questions in turn with these buttons, by title, and any after them with
+    /// Don't Save or Cancel. Each question is noted in `asked`.
+    static func answer(_ titles: [String]) {
+        asked = []
+        var queue = titles
+        NSAlert.answering = { alert in
+            AppTestCase.asked.append(alert.messageText + "\n" + alert.informativeText)
+            let next = queue.isEmpty ? nil : queue.removeFirst()
+            return AppTestCase.press(next.map { [$0] } ?? ["Don't Save", "Cancel"], in: alert)
+        }
     }
 
     /// The first of `titles` that the question has as a button, or else its first button.
@@ -1543,7 +1558,7 @@ final class ServiceTests: AppTestCase {
         let paper = root.appendingPathComponent("paper.tex"), taken = root.appendingPathComponent("essay.tex")
         for file in [paper, taken] { try "\\documentclass{article}".write(to: file, atomically: true, encoding: .utf8) }
         Workspace.toldInstead = { _, _ in }
-        NSAlert.answering = { AppTestCase.press(["Save"], in: $0) }
+        AppTestCase.answer(["Save"])
         defer { Workspace.toldInstead = nil }
         let workspace = Workspace(root: root, launchAgent: false)
         defer { workspace.close() }
